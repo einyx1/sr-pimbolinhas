@@ -1,0 +1,205 @@
+{
+  "avisos": {
+    "1088617855907537016": 2,
+    "822642750099816489": 3,
+    "1467671760257290505": 1
+  },
+  "capsulasPendentes": [],
+  "murais": {},
+  "changelogs": {},
+  "snapshots": {},
+  "votacoesAtivas": {},
+  "economia": {
+    "1088617855907537016": {
+      "carteira": 3850,
+      "banco": 0,
+      "nivel": 194,
+      "casadoCom": "822642750099816489",
+      "xp": 965103,
+      "emprestimo": null,
+      "diarioStreak": 2,
+      "diarioUltimo": 1784661573897
+    },
+    "822642750099816489": {
+      "carteira": 0,
+      "banco": 26630,
+      "nivel": 23,
+      "casadoCom": "1088617855907537016",
+      "xp": 113852,
+      "emprestimo": null,
+      "diarioStreak": 3,
+      "diarioUltimo": 1784758955070
+    },
+    "1342154745711825027": {
+      "carteira": 1100,
+      "banco": 2760,
+      "nivel": 1,
+      "casadoCom": null,
+      "xp": 0,
+      "emprestimo": null,
+      "diarioStreak": 3,
+      "diarioUltimo": 1784776704027
+    },
+    "1474787930500366396": {
+      "carteira": 612,
+      "banco": 2206,
+      "nivel": 7,
+      "casadoCom": null,
+      "xp": 32413,
+      "emprestimo": null,
+      "diarioStreak": 3,
+      "diarioUltimo": 1784731857639
+    },
+    "1320419238686621797": {
+      "carteira": 300,
+      "banco": 4208,
+      "nivel": 1,
+      "casadoCom": null,
+      "xp": 3460,
+      "emprestimo": null,
+      "diarioStreak": 2,
+      "diarioUltimo": 1784672947567
+    },
+    "1416399960844275754": {
+      "carteira": 1700,
+      "banco": 0,
+      "nivel": 1,
+      "xp": 0,
+      "casadoCom": null,
+      "emprestimo": null,
+      "diarioStreak": 0,
+      "diarioUltimo": 0
+    },
+    "1528087286682484908": {
+      "carteira": 900,
+      "banco": 0,
+      "nivel": 1,
+      "xp": 0,
+      "casadoCom": null,
+      "emprestimo": null,
+      "diarioStreak": 0,
+      "diarioUltimo": 0
+    },
+    "1102721214457327646": {
+      "carteira": 2400,
+      "banco": 0,
+      "nivel": 1,
+      "xp": 0,
+      "casadoCom": null,
+      "emprestimo": null,
+      "diarioStreak": 2,
+      "diarioUltimo": 1784672723769
+    },
+    "994030367625445386": {
+      "carteira": 1940,
+      "banco": 0,
+      "nivel": 3,
+      "xp": 13450,
+      "casadoCom": null,
+      "emprestimo": null,
+      "diarioStreak": 0,
+      "diarioUltimo": 0
+    },
+    "1274160153112875111": {
+      "carteira": 3400,
+      "banco": 0,
+      "nivel": 1,
+      "xp": 0,
+      "casadoCom": null,
+      "emprestimo": null,
+      "diarioStreak": 2,
+      "diarioUltimo": 1784727714999
+    },
+    "1282766155152494672": {
+      "carteira": 300,
+      "banco": 620,
+      "nivel": 1,
+      "xp": 0,
+      "casadoCom": null,
+      "emprestimo": null,
+      "diarioStreak": 1,
+      "diarioUltimo": 1784643067819
+    },
+    "1482988981741424722": {
+      "carteira": 1350,
+      "banco": 2050,
+      "nivel": 1,
+      "xp": 0,
+      "casadoCom": null,
+      "emprestimo": null,
+      "diarioStreak": 0,
+      "diarioUltimo": 0
+    },
+    "1495441548249403483": {
+      "carteira": 0,
+      "banco": 1050,
+      "nivel": 1,
+      "xp": 0,
+      "casadoCom": null,
+      "emprestimo": null,
+      "diarioStreak": 3,
+      "diarioUltimo": 1784830811076
+    },
+    "1521712879362117693": {
+      "carteira": 300,
+      "banco": 0,
+      "nivel": 1,
+      "xp": 0,
+      "casadoCom": null,
+      "emprestimo": null,
+      "diarioStreak": 0,
+      "diarioUltimo": 0
+    },
+    "1467671760257290505": {
+      "carteira": 300,
+      "banco": 0,
+      "nivel": 1,
+      "xp": 0,
+      "casadoCom": null,
+      "emprestimo": null,
+      "diarioStreak": 0,
+      "diarioUltimo": 0
+    }
+  },
+  "impostoArrecadado": 857283,
+  "sessoesAtivas": {
+    "1524910258206802092": {
+      "guildId": "1524910258206802092",
+      "canalId": "1524910258856923148",
+      "horario": "16:00",
+      "alvoMs": 1784833200000,
+      "chamada1Em": 1784832000000,
+      "chamada2Em": 1784832600000,
+      "enviouChamada1": false,
+      "enviouChamada2": false,
+      "enviouChamada3": false,
+      "janelaAberta": false,
+      "presentes": []
+    }
+  },
+  "faltasSessao": {
+    "1282766155152494672": 1,
+    "822642750099816489": 1,
+    "1462555298622472243": 2,
+    "1474787930500366396": 0,
+    "1342154745711825027": 2,
+    "1088617855907537016": 2,
+    "1102721214457327646": 2,
+    "1274160153112875111": 0,
+    "1495441548249403483": 2,
+    "1090465633658998804": 2,
+    "1416399960844275754": 2,
+    "1292798735398600769": 2,
+    "1521712879362117693": 2,
+    "1467671760257290505": 1,
+    "1482988981741424722": 2,
+    "1320419238686621797": 2,
+    "994327601344688289": 2,
+    "255307743810945025": 2,
+    "994030367625445386": 2,
+    "1253716204741328927": 1,
+    "1415485946685689989": 1,
+    "880517273352273941": 1,
+    "873003849923821668": 1
+  }
+}
