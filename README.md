@@ -1,7 +1,7 @@
 <table>
 <tr>
 <td width="150">
-<img src="assets/sr_pimbolinhas.webp" width="130" alt="Sr. Pimbolinhas" />
+<img src="assets/sr pimbolinhas.webp" width="130" alt="Sr. Pimbolinhas" />
 </td>
 <td>
 
