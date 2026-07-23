@@ -24,8 +24,8 @@ Todos os dados (economia, avisos, sessões, murais, etc.) são salvos em disco (
 ## ⚙️ Instalação
 
 ```bash
-git clone <url-do-seu-repositório>
-cd <pasta-do-projeto>
+git clone (https://github.com/einyx1/sr-pimbolinhas)
+cd index.js
 npm install
 ```
 
