@@ -7,9 +7,19 @@ const path = require('path');
 const {
     Client,
     GatewayIntentBits,
+    Partials,
     PermissionsBitField,
     EmbedBuilder,
-    ChannelType
+    ChannelType,
+    ActionRowBuilder,
+    ButtonBuilder,
+    ButtonStyle,
+    StringSelectMenuBuilder,
+    ComponentType,
+    SlashCommandBuilder,
+    REST,
+    Routes,
+    Collection
 } = require('discord.js');
 
 const {
@@ -22,6 +32,7 @@ const {
 
 const { buscarInfoMusica, criarRecursoAudio } = require('./musica.js');
 const { buscarFaixas: buscarFaixasSpotify, ehPlaylistOuAlbum: ehPlaylistOuAlbumSpotify } = require('./spotify.js');
+const fatosCuriosos = require('./fatos.js');
 
 const client = new Client({
     intents: [
@@ -30,8 +41,10 @@ const client = new Client({
         GatewayIntentBits.GuildMembers,
         GatewayIntentBits.GuildVoiceStates,
         GatewayIntentBits.GuildMessageReactions,
-        GatewayIntentBits.MessageContent
-    ]
+        GatewayIntentBits.MessageContent,
+        GatewayIntentBits.DirectMessages // necessário pra receber mensagens em DM
+    ],
+    partials: [Partials.Channel] // sem isso o discord.js não dispara messageCreate em DM
 });
 
 // Rede de segurança: se algum erro escapar do try/catch dos comandos
@@ -198,6 +211,15 @@ function ehDono(message) {
     return OWNER_IDS.includes(message.author.id);
 }
 
+// Converte durações tipo "30s", "10m", "2h", "1d" em milissegundos. Retorna null se inválido.
+function parseDuracaoMs(str) {
+    const match = (str || '').trim().match(/^(\d+)\s*(s|m|h|d)$/i);
+    if (!match) return null;
+
+    const multiplicadores = { s: 1000, m: 60000, h: 3600000, d: 86400000 };
+    return parseInt(match[1], 10) * multiplicadores[match[2].toLowerCase()];
+}
+
 // Taxa da casa: percentual cobrado em cima do LUCRO (não da aposta inteira)
 // em qualquer jogo de azar. Esse valor é debitado da conta do jogador (depois
 // de ele já ter recebido o prêmio cheio) e vai direto pro imposto arrecadado.
@@ -219,6 +241,465 @@ const DIARIO_BASE = 250;
 const DIARIO_INTERVALO_MS = 24 * 60 * 60 * 1000;
 const DIARIO_TOLERANCIA_MS = 48 * 60 * 60 * 1000; // até 48h pra manter a sequência
 
+// ---------- Loja ----------
+// Preços pensados considerando que a maioria dos membros tem uns 1000 de
+// saldo mínimo e que o casamento (item mais caro que já existia) custa 25k.
+const PRECO_VIP = 15000;    // cargo VIP com nome e cor escolhidos pelo próprio membro
+const PRECO_EMOJI = 20000;  // emoji personalizado adicionado ao servidor
+const PRECO_ANEL = 35000;   // anel de noivado — funde a conta com a do cônjuge
+
+// Títulos: aparecem do lado do apelido da pessoa no servidor, tipo "Nome [Título]".
+// Não mexem no apelido antigo, só adicionam o sufixo.
+const TITULOS = [
+    { id: 'heroi_historia', nome: 'O Herói mais forte da história', preco: 22000 },
+    { id: 'heroi_atualidade', nome: 'O Herói mais forte da atualidade', preco: 18000 },
+    { id: 'ameaca_paris', nome: 'Ameaça de Paris', preco: 15000 },
+    { id: 'protetor_paris', nome: 'Protetor de Paris', preco: 15000 },
+    { id: 'vilao_historia', nome: 'O Vilão mais forte da história', preco: 22000 },
+    { id: 'vilao_atualidade', nome: 'O Vilão mais forte da atualidade', preco: 18000 },
+    { id: 'lenda_paris', nome: 'Lenda de Paris', preco: 25000 }
+];
+
+// Trabalho: renda pequena e frequente, sem risco.
+const TRABALHO_COOLDOWN_MS = 60 * 60 * 1000; // 1h
+const TRABALHO_MIN = 100;
+const TRABALHO_MAX = 400;
+
+// Crime: renda maior, mas 60% de chance de dar errado e a pessoa ficar devendo.
+const CRIME_COOLDOWN_MS = 45 * 60 * 1000; // 45min
+const CRIME_CHANCE_SUCESSO = 0.40; // 40% de chance de dar certo
+const CRIME_GANHO_MIN = 500;
+const CRIME_GANHO_MAX = 1500;
+const CRIME_MULTA_MIN = 400;
+const CRIME_MULTA_MAX = 1800;
+
+// Miraculous: preços "salgados" mas nenhum passa de 25k. Cada um dá acesso a
+// um comando de poder próprio (ver seção "Poderes dos Miraculous").
+const MIRACULOUS = [
+    { id: 'joaninha', emoji: '🐞', nome: 'Miraculous da Joaninha', poder: 'Talismã', comando: 'p!talismã @pessoa', descricao: 'Prende (muta) o alvo por 20 segundos.', preco: 25000 },
+    { id: 'gato', emoji: '🐈‍⬛', nome: 'Miraculous do Gato', poder: 'Cataclismo', comando: 'p!cataclismo (respondendo a uma mensagem)', descricao: 'Apaga a mensagem que você está respondendo.', preco: 24000 },
+    { id: 'pavao', emoji: '🦚', nome: 'Miraculous do Pavão', poder: 'Sentimonstro', comando: 'p!sentimonstro', descricao: 'Cria um aliado temporário que absorve o próximo ataque no seu lugar.', preco: 21000 },
+    { id: 'raposa', emoji: '🦊', nome: 'Miraculous da Raposa', poder: 'Miragem', comando: 'p!miragem', descricao: 'Cria uma ilusão: por um tempo, seus comandos mostram um alvo falso.', preco: 19000 },
+    { id: 'abelha', emoji: '🐝', nome: 'Miraculous da Abelha', poder: 'Ferroada', comando: 'p!ferroada @pessoa', descricao: 'Veneno: paralisa (muta) o alvo por 20 segundos.', preco: 18000 },
+    { id: 'tartaruga', emoji: '🐢', nome: 'Miraculous da Tartaruga', poder: 'Casco-Protetor', comando: 'p!proteção', descricao: 'Fica imune aos próximos 2 ataques.', preco: 20000 },
+    { id: 'cavalo', emoji: '🐴', nome: 'Miraculous do Cavalo', poder: 'Viagem', comando: 'p!viajar', descricao: 'Abre um portal: troca de posição com alguém aleatório do chat pra receber o próximo ataque no seu lugar.', preco: 17000 },
+    { id: 'cobra', emoji: '🐍', nome: 'Miraculous da Cobra', poder: 'Segunda Chance', comando: 'p!segunda-chance', descricao: 'Se sofrer um efeito negativo nos próximos 30 segundos, ele é cancelado.', preco: 21000 },
+    { id: 'boi', emoji: '🐂', nome: 'Miraculous do Boi (Stompp)', poder: 'Resistência', comando: 'p!resistencia', descricao: 'Fica imune a magia: não pode ser afetado por 1 golpe.', preco: 16000 },
+    { id: 'cachorro', emoji: '🐶', nome: 'Miraculous do Cachorro', poder: 'Busca', comando: 'p!pega! @pessoa', descricao: 'Usa seu faro e muta o alvo por 20 segundos.', preco: 15000 },
+    { id: 'tigre', emoji: '🐯', nome: 'Miraculous do Tigre (Roarr)', poder: 'Golpe Poderoso', comando: 'p!colisão', descricao: 'Desfere um golpe devastador: apaga as últimas 8 mensagens do canal.', preco: 23000 },
+    { id: 'aguia', emoji: '🦅', nome: 'Miraculous da Águia (Liiri)', poder: 'Liberdade', comando: 'p!libertar @pessoa', descricao: 'Remove mutes e efeitos de controle do alvo.', preco: 19000 },
+    { id: 'cabra', emoji: '🐐', nome: 'Miraculous da Cabra', poder: 'Gênese', comando: 'p!genesis', descricao: 'Faz chover Miracoins: as últimas 5 pessoas que falaram no canal ganham 250 Miracoins cada.', preco: 25000 }
+];
+
+function pegarMiraculous(id) {
+    return MIRACULOUS.find(m => m.id === id);
+}
+
+function pegarTitulo(id) {
+    return TITULOS.find(t => t.id === id);
+}
+
+// ---------- Estrutura da loja: categorias + páginas ----------
+// Limitado a 3 pra caber os botões de compra: o Discord permite no máximo 5
+// fileiras de componentes por mensagem (3 botões de item + seletor + navegação = 5).
+const ITENS_POR_PAGINA_LOJA = 3;
+
+const LOJA_CATEGORIAS = [
+    {
+        id: 'cargos',
+        nome: '👑 Cargos & Cosméticos',
+        descricao: 'Cargo VIP, emoji personalizado e títulos que aparecem do lado do seu nick.',
+        itens: [
+            { emoji: '👑', nome: 'Cargo VIP', preco: PRECO_VIP, descricao: 'Cargo com nome e cor escolhidos por você (sobe pro topo do servidor).', comando: 'p!comprar vip Nome do Cargo | #FF00AA' },
+            { emoji: '😎', nome: 'Emoji personalizado', preco: PRECO_EMOJI, descricao: 'Adiciona um emoji seu ao servidor (anexe uma imagem na mensagem).', comando: 'p!comprar emoji nome_do_emoji' },
+            ...TITULOS.map(t => ({ emoji: '🏷️', nome: `Título: ${t.nome}`, preco: t.preco, descricao: 'Aparece do lado do seu apelido: "Nome [Título]".', comando: `p!comprar titulo ${t.id}`, compraDireta: true, tipo: 'titulo', idItem: t.id }))
+        ]
+    },
+    {
+        id: 'casamento',
+        nome: '💍 Casamento',
+        descricao: 'Itens ligados ao casamento (`p!casar`).',
+        itens: [
+            { emoji: '💍', nome: 'Anel de noivado', preco: PRECO_ANEL, descricao: 'Funde sua carteira e banco com os do seu cônjuge.', comando: 'p!comprar anel', compraDireta: true, tipo: 'anel', idItem: null }
+        ]
+    },
+    {
+        id: 'miraculous',
+        nome: '🐞 Miraculous',
+        descricao: 'Cada Miraculous dá acesso a um poder único de combate.',
+        itens: MIRACULOUS.map(m => ({ emoji: m.emoji, nome: `${m.nome} (${m.poder})`, preco: m.preco, descricao: m.descricao, comando: `p!comprar miraculous ${m.id}`, compraDireta: true, tipo: 'miraculous', idItem: m.id }))
+    }
+];
+
+// Embed único da página: um field por item (nome + preço no título do field,
+// descrição no corpo) — igual a uma "carta" de loja com vários itens dentro.
+function construirEmbedLoja(categoriaIndex, pagina) {
+    const categoria = LOJA_CATEGORIAS[categoriaIndex];
+    const totalPaginas = Math.max(1, Math.ceil(categoria.itens.length / ITENS_POR_PAGINA_LOJA));
+    pagina = Math.min(Math.max(pagina, 0), totalPaginas - 1);
+
+    const inicio = pagina * ITENS_POR_PAGINA_LOJA;
+    const fatia = categoria.itens.slice(inicio, inicio + ITENS_POR_PAGINA_LOJA);
+
+    const embed = new EmbedBuilder()
+        .setTitle(`🛒 Loja do servidor — ${categoria.nome}`)
+        .setColor(0x8A2BE2)
+        .setDescription(`${categoria.descricao}\n\nUse os botões abaixo pra comprar na hora, ou \`p!comprar <item>\`.`)
+        .addFields(
+            fatia.map(item => ({
+                name: `${item.emoji} ${item.nome} — ${formatarMoeda(item.preco)}`,
+                value: item.descricao
+            }))
+        )
+        .setFooter({ text: `Página ${pagina + 1}/${totalPaginas} — Categoria ${categoriaIndex + 1}/${LOJA_CATEGORIAS.length}` });
+
+    return { embed, pagina, totalPaginas, fatia, inicio };
+}
+
+function construirComponentesLoja(categoriaIndex, pagina, totalPaginas, fatia, inicio) {
+    const selectMenu = new StringSelectMenuBuilder()
+        .setCustomId('loja_categoria')
+        .setPlaceholder('Escolha uma categoria')
+        .addOptions(
+            LOJA_CATEGORIAS.map((cat, i) => ({
+                label: cat.nome,
+                value: String(i),
+                default: i === categoriaIndex
+            }))
+        );
+
+    const botoesNavegacao = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('loja_anterior').setLabel('◀ Anterior').setStyle(ButtonStyle.Secondary).setDisabled(pagina <= 0),
+        new ButtonBuilder().setCustomId('loja_proximo').setLabel('Próxima ▶').setStyle(ButtonStyle.Secondary).setDisabled(pagina >= totalPaginas - 1)
+    );
+
+    // Um botão por item, na mesma ordem dos fields do embed — fica logo abaixo
+    // do embed, na mesma sequência visual dos itens listados.
+    const botoesItens = fatia.map((item, i) => {
+        const indiceGlobal = inicio + i;
+
+        if (item.compraDireta) {
+            return new ActionRowBuilder().addComponents(
+                new ButtonBuilder()
+                    .setCustomId(`loja_comprar_${categoriaIndex}_${indiceGlobal}`)
+                    .setLabel(`${item.nome} — ${Math.round(item.preco).toLocaleString('pt-BR')}`.slice(0, 80))
+                    .setEmoji('✨')
+                    .setStyle(ButtonStyle.Success)
+            );
+        }
+
+        return new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+                .setCustomId(`loja_vercomando_${categoriaIndex}_${indiceGlobal}`)
+                .setLabel(`Ver comando: ${item.nome}`.slice(0, 80))
+                .setStyle(ButtonStyle.Secondary)
+        );
+    });
+
+    return [...botoesItens, new ActionRowBuilder().addComponents(selectMenu), botoesNavegacao];
+}
+
+// ---------- Compra direta de itens da loja (usada pelo p!comprar e pelos botões verdes) ----------
+// `ctx` padroniza a resposta pra funcionar tanto com mensagem normal (p!comprar)
+// quanto com clique de botão (interação): { autorId, autorUsername, responderErro, enviarPublico }
+
+async function executarCompraAnel(ctx) {
+    const contaAutor = pegarConta(ctx.autorId);
+
+    if (!contaAutor.casadoCom) {
+        return ctx.responderErro('❌ Você precisa estar casado(a) (`p!casar`) pra comprar o anel de noivado.');
+    }
+
+    if (contaAutor.contaConjuntaCom) {
+        return ctx.responderErro('❌ Você já tem o anel de noivado com seu cônjuge.');
+    }
+
+    if (contaAutor.carteira < PRECO_ANEL) {
+        return ctx.responderErro(`❌ O anel de noivado custa ${formatarMoeda(PRECO_ANEL)} e você não tem esse valor. Carteira: ${formatarMoeda(contaAutor.carteira)}`);
+    }
+
+    const conjugeId = contaAutor.casadoCom;
+    const contaConjuge = pegarConta(conjugeId);
+
+    if (contaConjuge.contaConjuntaCom) {
+        return ctx.responderErro('❌ Seu cônjuge já está com a conta unida a outra pessoa. Isso não devia acontecer — chama um dono do bot.');
+    }
+
+    contaAutor.carteira -= PRECO_ANEL;
+
+    const chave = chaveCasal(ctx.autorId, conjugeId);
+    contasConjuntas[chave] = {
+        carteira: contaAutor.carteira + contaConjuge.carteira,
+        banco: contaAutor.banco + contaConjuge.banco
+    };
+
+    contaAutor.contaConjuntaCom = conjugeId;
+    contaConjuge.contaConjuntaCom = ctx.autorId;
+    salvarDados();
+
+    let nomeConjuge = 'seu cônjuge';
+    try {
+        const usuario = await client.users.fetch(conjugeId);
+        nomeConjuge = usuario.username;
+    } catch (_) {}
+
+    return ctx.enviarPublico(
+        `💍 **${ctx.autorUsername}** comprou o anel de noivado! A conta dele(a) agora está unida com a de **${nomeConjuge}** — ` +
+        `carteira e banco são compartilhados entre os dois a partir de agora. (Use \`p!divorciar\` pra desfazer.)`
+    );
+}
+
+async function executarCompraTitulo(ctx, idTitulo) {
+    const titulo = pegarTitulo(idTitulo);
+
+    if (!titulo) {
+        return ctx.responderErro(
+            'Use: p!comprar titulo <id>\nTítulos disponíveis:\n' +
+            TITULOS.map(t => `\`${t.id}\` — ${t.nome} (${formatarMoeda(t.preco)})`).join('\n')
+        );
+    }
+
+    const conta = pegarConta(ctx.autorId);
+
+    if (conta.titulosComprados.includes(titulo.id)) {
+        return ctx.responderErro(`❌ Você já comprou o título **${titulo.nome}**. Use \`p!titulo ${titulo.id}\` pra equipar.`);
+    }
+
+    if (conta.carteira < titulo.preco) {
+        return ctx.responderErro(`❌ O título **${titulo.nome}** custa ${formatarMoeda(titulo.preco)} e você não tem esse valor. Carteira: ${formatarMoeda(conta.carteira)}`);
+    }
+
+    conta.carteira -= titulo.preco;
+    conta.titulosComprados.push(titulo.id);
+    salvarDados();
+
+    return ctx.enviarPublico(
+        `🏷️ **${ctx.autorUsername}** comprou o título **${titulo.nome}**!\n` +
+        `Use \`p!titulo ${titulo.id}\` pra equipar (ou \`p!titulo remover\` pra tirar).`
+    );
+}
+
+async function executarCompraMiraculous(ctx, idMiraculous) {
+    const miraculous = pegarMiraculous(idMiraculous);
+
+    if (!miraculous) {
+        return ctx.responderErro(
+            'Use: p!comprar miraculous <id>\nMiraculous disponíveis:\n' +
+            MIRACULOUS.map(m => `\`${m.id}\` — ${m.emoji} ${m.nome} (${formatarMoeda(m.preco)})`).join('\n')
+        );
+    }
+
+    const conta = pegarConta(ctx.autorId);
+
+    if (conta.miraculousComprados.includes(miraculous.id)) {
+        return ctx.responderErro(`❌ Você já tem o **${miraculous.nome}**.`);
+    }
+
+    if (conta.carteira < miraculous.preco) {
+        return ctx.responderErro(`❌ O **${miraculous.nome}** custa ${formatarMoeda(miraculous.preco)} e você não tem esse valor. Carteira: ${formatarMoeda(conta.carteira)}`);
+    }
+
+    conta.carteira -= miraculous.preco;
+    conta.miraculousComprados.push(miraculous.id);
+    salvarDados();
+
+    return ctx.enviarPublico(
+        `${miraculous.emoji} **${ctx.autorUsername}** recebeu o **${miraculous.nome}**!\n` +
+        `Poder: **${miraculous.poder}** — ${miraculous.descricao}\n` +
+        `Use: \`${miraculous.comando}\``
+    );
+}
+
+// Roteia pro executor certo a partir do item da loja (usado pelos botões verdes).
+async function executarCompraDireta(ctx, item) {
+    if (item.tipo === 'anel') return executarCompraAnel(ctx);
+    if (item.tipo === 'titulo') return executarCompraTitulo(ctx, item.idItem);
+    if (item.tipo === 'miraculous') return executarCompraMiraculous(ctx, item.idItem);
+    return ctx.responderErro('❌ Esse item não pode ser comprado direto pelo botão.');
+}
+
+// Remove acentos pra facilitar bater comandos com/sem acento (talismã/talisma, proteção/protecao...)
+function semAcento(texto) {
+    return (texto || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+}
+
+// Confere se a PRIMEIRA PALAVRA da mensagem é exatamente um dos comandos (ignorando
+// acento e maiúscula/minúscula). Usa igualdade da primeira palavra, não startsWith,
+// pra não colidir com comandos parecidos (ex: p!pega vs p!pegarimposto).
+function comandoBate(conteudo, ...comandos) {
+    const primeiraPalavra = semAcento((conteudo || '').trim().split(/\s+/)[0] || '').toLowerCase();
+    return comandos.some(cmd => primeiraPalavra === semAcento(cmd.toLowerCase()));
+}
+
+// Canal onde os poderes dos Miraculous podem ser usados. Donos do bot não têm essa restrição.
+const CANAL_PODERES_MIRACULOUS = '1524910258856923148';
+
+// Lista de comandos de poder (primeira palavra), usada pra restringir onde podem ser usados.
+const COMANDOS_PODERES_MIRACULOUS = [
+    'p!talisma', 'p!cataclismo', 'p!sentimonstro', 'p!miragem', 'p!ferroada',
+    'p!protecao', 'p!viajar', 'p!segunda-chance', 'p!segundachance', 'p!resistencia',
+    'p!pega', 'p!pega!', 'p!colisao', 'p!libertar', 'p!genesis'
+];
+
+function ehComandoDePoder(conteudo) {
+    return comandoBate(conteudo, ...COMANDOS_PODERES_MIRACULOUS);
+}
+
+// ---------- Poderes dos Miraculous: proteções de combate ----------
+// Confere, na ordem certa, se o alvo tem alguma proteção ativa. Se tiver,
+// consome a proteção (gasta 1 uso / cancela) e retorna o motivo. Quem estiver
+// chamando isso deve CANCELAR o efeito negativo se "protegido" vier true.
+function verificarProtecao(contaAlvo) {
+    const agora = Date.now();
+
+    // Casco-Protetor (Tartaruga) — absorve os próximos 2 ataques
+    if (contaAlvo.escudoTartaruga > 0) {
+        contaAlvo.escudoTartaruga -= 1;
+        return { protegido: true, motivo: '🐢 O Casco-Protetor absorveu o ataque!' };
+    }
+
+    // Resistência (Boi) — imune a 1 golpe
+    if (contaAlvo.resistenciaBoi) {
+        contaAlvo.resistenciaBoi = false;
+        return { protegido: true, motivo: '🐂 A Resistência bloqueou o golpe!' };
+    }
+
+    // Segunda Chance (Cobra) — cancela efeito negativo dentro da janela de 30s
+    if (contaAlvo.segundaChanceAte && agora <= contaAlvo.segundaChanceAte) {
+        contaAlvo.segundaChanceAte = 0;
+        return { protegido: true, motivo: '🐍 A Segunda Chance cancelou o efeito!' };
+    }
+
+    return { protegido: false, motivo: null };
+}
+
+// Se o alvo tiver usado "Viagem" (Cavalo) recentemente, redireciona o ataque
+// pra quem foi sorteado no lugar dele. Retorna o id final que deve receber o
+// ataque (pode ser o mesmo id, se não houver redirecionamento ativo).
+function resolverRedirecionamento(idAlvoOriginal) {
+    const contaAlvo = pegarConta(idAlvoOriginal);
+    const agora = Date.now();
+
+    if (contaAlvo.redirecionarAtaquePara && agora <= contaAlvo.redirecionarAte) {
+        const idFinal = contaAlvo.redirecionarAtaquePara;
+        contaAlvo.redirecionarAtaquePara = null;
+        contaAlvo.redirecionarAte = 0;
+        return idFinal;
+    }
+
+    return idAlvoOriginal;
+}
+
+// Aplica um "ataque" de mute (timeout) considerando proteções e redirecionamento.
+// Retorna uma string pronta pra usar na resposta do comando.
+async function aplicarAtaqueMute(message, alvo, ms, fraseAcao) {
+    const idFinal = resolverRedirecionamento(alvo.id);
+    const contaFinal = pegarConta(idFinal);
+
+    const { protegido, motivo } = verificarProtecao(contaFinal);
+    salvarDados();
+
+    if (protegido) {
+        return `${fraseAcao}\n${motivo}`;
+    }
+
+    if (!message.guild) return `${fraseAcao}\n(Fora de um servidor não dá pra aplicar o mute de verdade.)`;
+
+    const membroFinal = await message.guild.members.fetch(idFinal).catch(() => null);
+    if (!membroFinal) return `${fraseAcao}\n❌ Não encontrei o alvo no servidor pra aplicar o efeito.`;
+    if (!membroFinal.moderatable) return `${fraseAcao}\n❌ Não consigo mutar essa pessoa (cargo dela é igual ou maior que o meu).`;
+
+    await membroFinal.timeout(ms, 'Poder de Miraculous').catch(() => {});
+
+    const aviso = idFinal !== alvo.id ? `\n🐴 (Redirecionado pra **${membroFinal.user.username}** pela Viagem!)` : '';
+    return `${fraseAcao}${aviso}`;
+}
+
+// Garante que a pessoa tem o miraculous necessário pra usar o poder.
+function temMiraculous(conta, id) {
+    return conta.miraculousComprados.includes(id);
+}
+
+// ---------- Cooldown dos poderes dos Miraculous ----------
+// Poderes mais fortes/destrutivos têm cooldown maior. Máximo: 1 hora.
+// Donos do bot (OWNER_IDS) não têm cooldown em nenhum poder.
+const COOLDOWN_PODERES_MS = {
+    joaninha: 5 * 60 * 1000,   // Talismã (mute 20s) — 5 min
+    abelha: 5 * 60 * 1000,     // Ferroada (mute 20s) — 5 min
+    cachorro: 5 * 60 * 1000,   // Busca (mute 20s) — 5 min
+    pavao: 10 * 60 * 1000,     // Sentimonstro (escudo) — 10 min
+    cobra: 10 * 60 * 1000,     // Segunda Chance — 10 min
+    aguia: 10 * 60 * 1000,     // Libertar — 10 min
+    cavalo: 15 * 60 * 1000,    // Viagem (redireciona ataque) — 15 min
+    raposa: 15 * 60 * 1000,    // Miragem (ilusão) — 15 min
+    gato: 15 * 60 * 1000,      // Cataclismo (apaga 1 mensagem) — 15 min
+    tartaruga: 20 * 60 * 1000, // Casco-Protetor (imune a 2 ataques) — 20 min
+    boi: 20 * 60 * 1000,       // Resistência (imune a 1 golpe) — 20 min
+    tigre: 45 * 60 * 1000,     // Colisão (apaga 8 mensagens do canal) — 45 min
+    cabra: 60 * 60 * 1000      // Gênese (dá Miracoins pra 5 pessoas) — 1h (máximo)
+};
+
+// Formata um tempo em ms como "Xmin Ys" ou "Ys" pra mostrar nas mensagens.
+function formatarTempoRestante(ms) {
+    const totalSegundos = Math.max(1, Math.ceil(ms / 1000));
+    const minutos = Math.floor(totalSegundos / 60);
+    const segundos = totalSegundos % 60;
+    if (minutos > 0) return `${minutos}min${segundos > 0 ? ` ${segundos}s` : ''}`;
+    return `${segundos}s`;
+}
+
+// Retorna quanto tempo (em ms) ainda falta de cooldown pro poder `id`.
+// Donos do bot nunca têm cooldown (retorna sempre 0).
+function pegarCooldownRestante(message, conta, id) {
+    if (ehDono(message)) return 0;
+
+    const cooldownMs = COOLDOWN_PODERES_MS[id] || 0;
+    if (cooldownMs === 0) return 0;
+
+    if (!conta.cooldownsPoderes) conta.cooldownsPoderes = {};
+
+    const ultimoUso = conta.cooldownsPoderes[id] || 0;
+    const passou = Date.now() - ultimoUso;
+
+    return passou < cooldownMs ? cooldownMs - passou : 0;
+}
+
+// Marca o poder `id` como usado agora (inicia o cooldown dele).
+function registrarUsoPoder(conta, id) {
+    if (!conta.cooldownsPoderes) conta.cooldownsPoderes = {};
+    conta.cooldownsPoderes[id] = Date.now();
+}
+
+// Reaplica o apelido com o título ativo no final, sem alterar o "nome base"
+// guardado da primeira vez que a pessoa equipou um título.
+async function aplicarTituloNoApelido(message, conta) {
+    if (!message.guild) return;
+
+    const membro = await message.guild.members.fetch(message.author.id).catch(() => null);
+    if (!membro) return;
+    if (!membro.manageable) return; // não consigo mudar apelido de quem tem cargo igual/maior
+
+    if (!conta.apelidoBase) {
+        conta.apelidoBase = membro.nickname || membro.user.username;
+    }
+
+    try {
+        if (conta.tituloAtivo) {
+            const titulo = pegarTitulo(conta.tituloAtivo);
+            const novoApelido = `${conta.apelidoBase} [${titulo ? titulo.nome : conta.tituloAtivo}]`.slice(0, 32);
+            await membro.setNickname(novoApelido, 'Título da loja equipado');
+        } else {
+            await membro.setNickname(conta.apelidoBase, 'Título da loja removido');
+        }
+    } catch (erro) {
+        console.error('Erro ao aplicar título no apelido:', erro);
+    }
+}
+
+function chaveCasal(id1, id2) {
+    return [id1, id2].sort().join('_');
+}
+
 function pegarConta(userId) {
     if (!economia[userId]) {
         economia[userId] = {
@@ -229,7 +710,22 @@ function pegarConta(userId) {
             casadoCom: null,
             emprestimo: null, // { valor, dataPegou }
             diarioStreak: 0,
-            diarioUltimo: 0
+            diarioUltimo: 0,
+            cargoVipId: null,        // id do cargo VIP personalizado (loja)
+            contaConjuntaCom: null,  // id do cônjuge, se comprou o anel de noivado
+            titulosComprados: [],    // ids dos títulos comprados na loja
+            tituloAtivo: null,       // id do título ativo (aparece do lado do nick)
+            apelidoBase: null,       // apelido "original" salvo pra poder reaplicar o título sem sujar o nick
+            miraculousComprados: [], // ids dos miraculous comprados
+            ultimoTrabalho: 0,       // timestamp do último p!trabalhar
+            ultimoCrime: 0,          // timestamp do último p!crime
+            escudoTartaruga: 0,      // quantos ataques ainda absorve (Casco-Protetor da Tartaruga e Sentimonstro do Pavão usam o mesmo contador)
+            resistenciaBoi: false,   // imune a 1 próximo ataque
+            segundaChanceAte: 0,     // timestamp até quando o próximo efeito negativo é cancelado
+            redirecionarAtaquePara: null, // id de quem recebe o próximo ataque no lugar dela (Viagem)
+            redirecionarAte: 0,
+            ilusaoAte: 0,            // até quando os comandos mostram um alvo falso (Miragem)
+            cooldownsPoderes: {}     // { idDoMiraculous: timestamp do último uso } — cooldown dos poderes
         };
     }
     // garante que contas antigas (criadas antes dessas mudanças) tenham os campos novos
@@ -238,6 +734,48 @@ function pegarConta(userId) {
     if (conta.emprestimo === undefined) conta.emprestimo = null;
     if (conta.diarioStreak === undefined) conta.diarioStreak = 0;
     if (conta.diarioUltimo === undefined) conta.diarioUltimo = 0;
+    if (conta.cargoVipId === undefined) conta.cargoVipId = null;
+    if (conta.contaConjuntaCom === undefined) conta.contaConjuntaCom = null;
+    if (conta.titulosComprados === undefined) conta.titulosComprados = [];
+    if (conta.tituloAtivo === undefined) conta.tituloAtivo = null;
+    if (conta.apelidoBase === undefined) conta.apelidoBase = null;
+    if (conta.miraculousComprados === undefined) conta.miraculousComprados = [];
+    if (conta.ultimoTrabalho === undefined) conta.ultimoTrabalho = 0;
+    if (conta.ultimoCrime === undefined) conta.ultimoCrime = 0;
+    if (conta.escudoTartaruga === undefined) conta.escudoTartaruga = 0;
+    if (conta.resistenciaBoi === undefined) conta.resistenciaBoi = false;
+    if (conta.segundaChanceAte === undefined) conta.segundaChanceAte = 0;
+    if (conta.redirecionarAtaquePara === undefined) conta.redirecionarAtaquePara = null;
+    if (conta.redirecionarAte === undefined) conta.redirecionarAte = 0;
+    if (conta.ilusaoAte === undefined) conta.ilusaoAte = 0;
+    if (conta.cooldownsPoderes === undefined) conta.cooldownsPoderes = {};
+
+    // Se a pessoa comprou o anel de noivado, carteira/banco passam a apontar
+    // pra um "cofre" compartilhado com o cônjuge, mas o resto (nível, xp,
+    // streak do diário etc) continua sendo individual.
+    if (conta.contaConjuntaCom) {
+        const chave = chaveCasal(userId, conta.contaConjuntaCom);
+        if (!contasConjuntas[chave]) {
+            contasConjuntas[chave] = { carteira: conta.carteira, banco: conta.banco };
+        }
+        const compartilhada = contasConjuntas[chave];
+
+        return new Proxy(conta, {
+            get(alvo, prop) {
+                if (prop === 'carteira' || prop === 'banco') return compartilhada[prop];
+                return alvo[prop];
+            },
+            set(alvo, prop, valor) {
+                if (prop === 'carteira' || prop === 'banco') {
+                    compartilhada[prop] = valor;
+                } else {
+                    alvo[prop] = valor;
+                }
+                return true;
+            }
+        });
+    }
+
     return conta;
 }
 
@@ -505,6 +1043,186 @@ async function resolverCorrida(canalId, canalTexto) {
     } catch (_) {}
 }
 
+// ---------- Jogo de UNO (multiplayer, lobby de 30s, mãos mandadas por DM) ----------
+// channelId -> { emLobby, emAndamento, jogadores: [userId...], usernames: {id: nome},
+//                maos: Map(userId -> [carta...]), baralho: [carta...], descarte: [carta...],
+//                corAtual, indiceAtual, direcao }
+const jogosUno = new Map();
+const TEMPO_LOBBY_UNO = 30000;
+const MAX_JOGADORES_UNO = 8;
+
+const EMOJI_COR_UNO = { vermelho: '🔴', azul: '🔵', verde: '🟢', amarelo: '🟡' };
+const NOMES_COR_UNO = { vermelho: 'Vermelho', azul: 'Azul', verde: 'Verde', amarelo: 'Amarelo' };
+const NOMES_ESPECIAIS_UNO = { pular: 'Pular', reverter: 'Reverter', '+2': '+2' };
+
+// Descreve a cor atual da mesa em texto + emoji (nunca só o emoji, pra não
+// depender dele renderizar/copiar certo em todo cliente).
+function formatarCorAtualUno(corAtual) {
+    if (!corAtual) return '⚫ (nenhuma)';
+    return `${EMOJI_COR_UNO[corAtual] || '⚫'} ${NOMES_COR_UNO[corAtual] || corAtual}`;
+}
+
+// Monta um baralho completo de UNO (108 cartas) já embaralhado.
+function criarBaralhoUno() {
+    const cores = ['vermelho', 'azul', 'verde', 'amarelo'];
+    const baralho = [];
+
+    for (const cor of cores) {
+        baralho.push({ cor, valor: '0' });
+        for (let n = 1; n <= 9; n++) {
+            baralho.push({ cor, valor: String(n) });
+            baralho.push({ cor, valor: String(n) });
+        }
+        for (let i = 0; i < 2; i++) {
+            baralho.push({ cor, valor: 'pular' });
+            baralho.push({ cor, valor: 'reverter' });
+            baralho.push({ cor, valor: '+2' });
+        }
+    }
+
+    for (let i = 0; i < 4; i++) {
+        baralho.push({ cor: null, valor: 'curinga' });
+        baralho.push({ cor: null, valor: '+4' });
+    }
+
+    for (let i = baralho.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [baralho[i], baralho[j]] = [baralho[j], baralho[i]];
+    }
+
+    return baralho;
+}
+
+function formatarCartaUno(carta) {
+    if (!carta.cor) return carta.valor === '+4' ? '⚫ +4' : '⚫ Curinga';
+    return `${EMOJI_COR_UNO[carta.cor]} ${NOMES_COR_UNO[carta.cor]} ${NOMES_ESPECIAIS_UNO[carta.valor] || carta.valor}`;
+}
+
+function cartaJogavelUno(carta, topo, corAtual) {
+    if (!carta.cor) return true; // curinga e +4 sempre podem ser jogados
+    if (carta.cor === corAtual) return true;
+    if (carta.valor === topo.valor) return true;
+    return false;
+}
+
+// Compra `quantidade` cartas do baralho, reembaralhando o descarte (menos o topo)
+// de volta pro baralho se ele acabar no meio da compra.
+function comprarCartasUno(jogo, quantidade) {
+    const compradas = [];
+
+    for (let i = 0; i < quantidade; i++) {
+        if (jogo.baralho.length === 0) {
+            if (jogo.descarte.length <= 1) break; // não sobrou carta em lugar nenhum
+
+            const topo = jogo.descarte.pop();
+            jogo.baralho = jogo.descarte;
+            jogo.descarte = [topo];
+
+            for (let j = jogo.baralho.length - 1; j > 0; j--) {
+                const k = Math.floor(Math.random() * (j + 1));
+                [jogo.baralho[j], jogo.baralho[k]] = [jogo.baralho[k], jogo.baralho[j]];
+            }
+        }
+
+        compradas.push(jogo.baralho.pop());
+    }
+
+    return compradas;
+}
+
+// Calcula o índice do próximo jogador, respeitando a direção da mesa e se
+// o próximo deve ser pulado (Pular, Reverter com 2 jogadores, +2, +4).
+function proximoIndiceUno(jogo, pular) {
+    const n = jogo.jogadores.length;
+    const passos = pular ? 2 : 1;
+    let novoIndice = (jogo.indiceAtual + jogo.direcao * passos) % n;
+    if (novoIndice < 0) novoIndice += n;
+    return novoIndice;
+}
+
+// Manda a mão atualizada por DM — se a DM estiver fechada, o jogo continua
+// (a pessoa só vai precisar confiar no anúncio público do canal).
+async function enviarMaoUnoPorDm(jogo, userId) {
+    try {
+        const usuario = await client.users.fetch(userId);
+        const mao = jogo.maos.get(userId) || [];
+        const lista = mao.map((c, i) => `${i + 1}. ${formatarCartaUno(c)}`).join('\n');
+        const topo = jogo.descarte[jogo.descarte.length - 1];
+
+        await usuario.send(
+            `🎮 **Sua mão no UNO:**\n${lista}\n\n` +
+            `Carta no topo: ${formatarCartaUno(topo)} | Cor atual: ${formatarCorAtualUno(jogo.corAtual)}\n\n` +
+            'No canal do servidor, jogue com `p!uno jogar <número>` — o número é a **posição da carta na lista acima** ' +
+            '(ex: `p!uno jogar 3` joga a 3ª carta da lista, não uma carta "3").\n' +
+            'Se a carta for curinga/+4, escolha a cor também: `p!uno jogar 3 vermelho`.\n' +
+            'Pra comprar uma carta: `p!uno comprar`.'
+        );
+    } catch (_) {}
+}
+
+async function anunciarTurnoUno(jogo, canalTexto) {
+    const userId = jogo.jogadores[jogo.indiceAtual];
+    await enviarMaoUnoPorDm(jogo, userId);
+
+    const topo = jogo.descarte[jogo.descarte.length - 1];
+    const quantidadeCartas = (jogo.maos.get(userId) || []).length;
+
+    try {
+        await canalTexto.send(
+            `👉 É a vez de **${jogo.usernames[userId]}**! Carta no topo: ${formatarCartaUno(topo)} | ` +
+            `Cor atual: ${formatarCorAtualUno(jogo.corAtual)} — ${quantidadeCartas} carta(s) na mão. ` +
+            '(confira sua mão na DM do bot)'
+        );
+    } catch (_) {}
+}
+
+async function iniciarJogoUno(canalId, canalTexto) {
+    const jogo = jogosUno.get(canalId);
+    if (!jogo || !jogo.emLobby) return;
+
+    if (jogo.jogadores.length < 2) {
+        jogosUno.delete(canalId);
+        try { await canalTexto.send('🎮 Ninguém mais entrou no UNO a tempo. Mesa cancelada.'); } catch (_) {}
+        return;
+    }
+
+    jogo.emLobby = false;
+    jogo.emAndamento = true;
+    jogo.baralho = criarBaralhoUno();
+
+    for (const userId of jogo.jogadores) {
+        jogo.maos.set(userId, jogo.baralho.splice(0, 7));
+    }
+
+    // Vira a primeira carta do descarte — se cair curinga/+4, devolve e tenta outra,
+    // pra começar sempre com uma cor e valor definidos.
+    let primeira = jogo.baralho.pop();
+    while (!primeira.cor) {
+        jogo.baralho.unshift(primeira);
+        primeira = jogo.baralho.pop();
+    }
+    jogo.descarte = [primeira];
+    jogo.corAtual = primeira.cor;
+
+    try {
+        await canalTexto.send(
+            `🎮 **UNO começou!** ${jogo.jogadores.length} jogadores: ${jogo.jogadores.map(id => `**${jogo.usernames[id]}**`).join(', ')}\n` +
+            `Carta inicial: ${formatarCartaUno(primeira)}\n` +
+            'Cada um recebeu 7 cartas — confira sua mão na DM do bot!'
+        );
+    } catch (_) {}
+
+    // Manda a mão inicial pra TODO MUNDO, não só pra quem joga primeiro —
+    // senão os outros jogadores ficam sem saber o que têm na mão até sua vez chegar.
+    // (quem já vai jogar primeiro recebe a DM logo abaixo, via anunciarTurnoUno)
+    for (const userId of jogo.jogadores) {
+        if (userId === jogo.jogadores[jogo.indiceAtual]) continue;
+        await enviarMaoUnoPorDm(jogo, userId);
+    }
+
+    await anunciarTurnoUno(jogo, canalTexto);
+}
+
 
 // ---------- Persistência em disco (arquivo dados.json) ----------
 // Tudo que precisa sobreviver a um reinício do bot é salvo aqui.
@@ -522,7 +1240,8 @@ function estadoPadrao() {
         economia: {},
         impostoArrecadado: 0,
         sessoesAtivas: {},
-        faltasSessao: {}
+        faltasSessao: {},
+        contasConjuntas: {}
     };
 }
 
@@ -542,6 +1261,20 @@ function carregarDoDisco() {
 const dadosCarregados = carregarDoDisco();
 
 const avisos = new Map(Object.entries(dadosCarregados.avisos));
+
+// Migração: versões antigas do bot guardavam só um número (contagem) de
+// avisos por pessoa. Agora guardamos uma lista com motivo/data/autor de cada
+// aviso, então convertemos qualquer entrada antiga pro novo formato.
+for (const [idUsuario, valor] of avisos) {
+    if (typeof valor === 'number') {
+        const listaConvertida = [];
+        for (let i = 0; i < valor; i++) {
+            listaConvertida.push({ motivo: 'Aviso antigo (sem detalhes registrados)', autorId: null, data: null });
+        }
+        avisos.set(idUsuario, listaConvertida);
+    }
+}
+
 const capsulasPendentes = dadosCarregados.capsulasPendentes; // array, já pronto
 const murais = new Map(Object.entries(dadosCarregados.murais));
 const changelogs = new Map(Object.entries(dadosCarregados.changelogs));
@@ -557,6 +1290,8 @@ let impostoArrecadado = dadosCarregados.impostoArrecadado || 0;
 const sessoesAtivas = new Map(Object.entries(dadosCarregados.sessoesAtivas));
 // faltasSessao: userId -> quantidade de FALTAS seguidas (0, 1, 2 — zera ou vira aviso ao chegar em 3)
 const faltasSessao = dadosCarregados.faltasSessao;
+// contasConjuntas: "idA_idB" (ordenados) -> { carteira, banco } — cofre compartilhado do anel de noivado
+const contasConjuntas = dadosCarregados.contasConjuntas;
 
 function salvarDados() {
     try {
@@ -570,7 +1305,8 @@ function salvarDados() {
             economia,
             impostoArrecadado,
             sessoesAtivas: Object.fromEntries(sessoesAtivas),
-            faltasSessao
+            faltasSessao,
+            contasConjuntas
         };
         fs.writeFileSync(ARQUIVO_DADOS, JSON.stringify(paraSalvar, null, 2));
     } catch (erro) {
@@ -642,7 +1378,14 @@ async function processarFimSessao(sessao) {
         const guild = await client.guilds.fetch(sessao.guildId);
         await guild.members.fetch(); // garante que o cache de membros está completo
 
-        const canalAviso = await client.channels.fetch(CANAL_AVISO_PRESENCA).catch(() => null);
+        const canalAviso = await client.channels.fetch(CANAL_AVISO_PRESENCA).catch((erro) => {
+            console.error(`Erro ao buscar o canal de aviso de presença (${CANAL_AVISO_PRESENCA}):`, erro);
+            return null;
+        });
+
+        if (!canalAviso) {
+            console.error(`Canal de aviso de presença (${CANAL_AVISO_PRESENCA}) não foi encontrado ou o bot não tem acesso a ele. Nenhum aviso de falta será enviado nesta sessão.`);
+        }
 
         for (const [userId, membro] of guild.members.cache) {
             if (membro.user.bot) continue;
@@ -661,7 +1404,9 @@ async function processarFimSessao(sessao) {
                         await canalAviso.send({
                             content: `🚨 **${membro.user.username}** (<@${userId}>) bateu **3/3** faltas seguidas nas chamadas de sessão!`,
                             allowedMentions: { users: [userId] }
-                        }).catch(() => {});
+                        }).catch((erro) => {
+                            console.error(`Erro ao enviar aviso de falta pra ${membro.user.username} (${userId}) no canal ${CANAL_AVISO_PRESENCA}:`, erro);
+                        });
                     }
                 } else {
                     faltasSessao[userId] = atual;
@@ -676,19 +1421,7 @@ async function processarFimSessao(sessao) {
 }
 
 function fatoAleatorio() {
-    const fatos = [
-        'Polvos têm três corações e sangue azul.',
-        'Mel nunca estraga — arqueólogos já encontraram potes de mel comestíveis com milhares de anos.',
-        'Um dia em Vênus é mais longo que um ano em Vênus.',
-        'Bananas são tecnicamente bagas, mas morangos não são.',
-        'O coração de um camarão fica na cabeça.',
-        'Existem mais estrelas no universo do que grãos de areia em todas as praias da Terra.',
-        'As impressões digitais dos coalas são quase idênticas às humanas.',
-        'O Wi-Fi não significa "Wireless Fidelity", é só um nome de marketing.',
-	'O nome pimbolinhas veio em uma brisa do einyx',
-	'os criadores do grupo são einyx, sayori, sofia, sami, charlotte, alix e kai',
-    ];
-    return fatos[Math.floor(Math.random() * fatos.length)];
+    return fatosCuriosos[Math.floor(Math.random() * fatosCuriosos.length)];
 }
 
 function dicaDiscord() {
@@ -865,20 +1598,46 @@ async function processarFaixasEmBackground(guildId, faixas, canalTexto) {
     } catch (_) {}
 }
 
-client.on('messageCreate', async (message) => {
-
-    if (message.author.bot) return;
+// Processa um comando (chamado tanto pelo messageCreate quanto pelos slash commands,
+// que constroem uma "mensagem falsa" equivalente e chamam essa função).
+async function processarComando(message) {
 
     try {
 
-        // Canal onde ninguém além dos donos pode usar comandos do bot
+        // ---------- Comandos permitidos em DM (fora de servidor) ----------
+        // Só os comandos que funcionam inteiramente com dados da conta (economia, diversão),
+        // sem precisar de cargo, canal ou membro do servidor. O resto só funciona no servidor.
+        if (!message.guild && message.content.startsWith('p!')) {
+            const COMANDOS_PERMITIDOS_DM = [
+                'p!ajuda', 'p!help',
+                'p!escolher', 'p!dado', 'p!moeda', 'p!8ball', 'p!ship', 'p!gay',
+                'p!fato', 'p!dica', 'p!gato',
+                'p!perfil', 'p!casar', 'p!divorciar',
+                'p!loja', 'p!comprar', 'p!titulo', 'p!título',
+                'p!trabalhar', 'p!crime', 'p!diario',
+                'p!depositar', 'p!sacar', 'p!transferir', 'p!cobrar',
+                'p!emprestimo', 'p!pagar', 'p!divida',
+                'p!blackjack', 'p!cacaniquel', 'p!caçaniquel', 'p!roleta', 'p!bola', 'p!corrida'
+            ];
+
+            if (!comandoBate(message.content, ...COMANDOS_PERMITIDOS_DM)) {
+                return message.reply('❌ Esse comando só funciona dentro do servidor. Em DM, só funcionam os comandos de economia e diversão (veja `p!ajuda`).');
+            }
+        }
+
+        // Canal onde ninguém além dos donos pode usar comandos do bot (exceto os poderes dos Miraculous, que são permitidos aqui)
         const CANAL_PROIBIDO_COMANDOS = '1524910258856923148';
-        if (message.channel.id === CANAL_PROIBIDO_COMANDOS && message.content.startsWith('p!') && !ehDono(message)) {
+        if (message.channel.id === CANAL_PROIBIDO_COMANDOS && message.content.startsWith('p!') && !ehDono(message) && !ehComandoDePoder(message.content)) {
             message.delete().catch(() => {});
             message.channel.send('🚫 Comandos não são permitidos nesse canal.')
                 .then(aviso => setTimeout(() => aviso.delete().catch(() => {}), 5000))
                 .catch(() => {});
             return;
+        }
+
+        // Os poderes dos Miraculous só podem ser usados no canal designado (donos do bot não têm essa restrição)
+        if (ehComandoDePoder(message.content) && message.channel.id !== CANAL_PODERES_MIRACULOUS && !ehDono(message)) {
+            return message.reply(`❌ Os poderes dos Miraculous só podem ser usados em <#${CANAL_PODERES_MIRACULOUS}>.`);
         }
 
         // Contagem de presença da sessão (p!sessão) — só conta "Eu" enquanto a
@@ -926,11 +1685,17 @@ client.on('messageCreate', async (message) => {
                         name: '🛠️ Moderação (exigem permissão)',
                         value:
                             '`p!limpar quantidade` — apaga mensagens\n' +
+                            '`p!purgemember @membro` — apaga as mensagens do membro em TODOS os canais\n' +
                             '`p!slowmode segundos` — define o slowmode do canal\n' +
                             '`p!trancar` / `p!destrancar` — tranca/destranca o canal atual\n' +
                             '`p!lockdown` / `p!openup` — tranca/destranca TODOS os canais\n' +
                             '`p!nuke` — recria o canal do zero\n' +
+                            '`p!ban @user motivo` — bane um membro\n' +
+                            '`p!unban ID` — desbane pelo ID\n' +
+                            '`p!mute @user duração motivo` — muta (timeout) por um tempo, ex: 10m, 2h\n' +
+                            '`p!desmutar @user` — remove o mute antes do tempo acabar\n' +
                             '`p!aviso @user motivo` — avisa um membro\n' +
+                            '`p!warnings [@user]` — histórico de avisos (livre pra ver o seu próprio)\n' +
                             '`p!userinfo [@user]` — informações de um membro (livre)\n' +
                             '`p!serverinfo` — informações do servidor (livre)'
                     },
@@ -944,7 +1709,10 @@ client.on('messageCreate', async (message) => {
                             '`p!sorteio duração | prêmio | vencedores` — ex: 60s, 10m, 2h\n' +
                             '`p!contadorregressivo duração | evento` — ex: 2h | Sessão\n' +
                             '`p!capsula AAAA-MM-DD | mensagem` — revela numa data futura\n' +
-                            '`p!sessão HH:MM` — agenda as chamadas 1/3, 2/3 e 3/3 (fuso GMT-3)'
+                            '`p!sessão HH:MM` — agenda as chamadas 1/3, 2/3 e 3/3 (fuso GMT-3)\n' +
+                            '`p!sessão cancelar` — cancela a sessão agendada\n' +
+                            '`p!sessão status` — vê se tem sessão agendada e em que etapa está (livre)\n' +
+                            '`p!faltas [@user]` — vê quantas faltas seguidas alguém tem (livre)'
                     },
                     {
                         name: '🤖 Automação (continuação)',
@@ -977,7 +1745,23 @@ client.on('messageCreate', async (message) => {
                             '`p!cobrar @user (valor)` — cobra alguém (precisa aceitar)\n' +
                             '`p!diario` — resgata recompensa diária (dobra a cada 5 dias de sequência)\n' +
                             '`p!emprestimo (valor)` — pega empréstimo do imposto arrecadado\n' +
-                            '`p!pagar (valor)` / `p!divida` — paga ou vê sua dívida'
+                            '`p!pagar (valor)` / `p!divida` — paga ou vê sua dívida\n' +
+                            '`p!trabalhar` — trabalho seguro, renda pequena (cooldown 1h)\n' +
+                            '`p!crime` — arriscado: 40% de ganhar, 60% de multa (pode ficar devendo)\n' +
+                            '`p!loja` — loja com categorias e páginas (cargos, títulos, casamento, miraculous)\n' +
+                            '`p!comprar <item>` — compra um item da loja\n' +
+                            '`p!titulo <id>` / `p!titulo remover` — equipa/remove um título comprado'
+                    },
+                    {
+                        name: '✨ Poderes dos Miraculous',
+                        value:
+                            'Compre um Miraculous em `p!loja` pra desbloquear o poder:\n' +
+                            '`p!talismã @user` (Joaninha) · `p!cataclismo` (Gato, respondendo a uma msg)\n' +
+                            '`p!sentimonstro` (Pavão) · `p!miragem` (Raposa)\n' +
+                            '`p!ferroada @user` (Abelha) · `p!proteção` (Tartaruga)\n' +
+                            '`p!viajar` (Cavalo) · `p!segunda-chance` (Cobra)\n' +
+                            '`p!resistencia` (Boi) · `p!pega! @user` (Cachorro)\n' +
+                            '`p!colisão` (Tigre) · `p!libertar @user` (Águia) · `p!genesis` (Cabra)'
                     },
                     {
                         name: '🎲 Apostas',
@@ -986,7 +1770,8 @@ client.on('messageCreate', async (message) => {
                             '`p!cacaniquel (valor)` — caça-níquel (só trinca paga)\n' +
                             '`p!roleta (valor) (vermelho|preto|verde)`\n' +
                             '`p!bola (valor)` — Jogo da Bola multiplayer (lobby de 30s)\n' +
-                            '`p!corrida (valor) (nº do cavalo)` — corrida multiplayer (lobby de 30s)'
+                            '`p!corrida (valor) (nº do cavalo)` — corrida multiplayer (lobby de 30s)\\n' +
+                            '`p!uno` — abre/entra numa mesa de UNO (lobby de 30s, mão vem por DM)'
                     },
                     {
                         name: '👑 Economia (só donos)',
@@ -1196,6 +1981,99 @@ client.on('messageCreate', async (message) => {
             return;
         }
 
+        // Purge member — apaga as mensagens de um membro em TODOS os canais do servidor
+        if (message.content.startsWith('p!purgemember')) {
+
+            if (!temPermissao(message, PermissionsBitField.Flags.ManageGuild)) {
+                return message.reply('❌ Sem permissão.');
+            }
+
+            if (!message.guild) {
+                return message.reply('❌ Esse comando só funciona dentro de um servidor.');
+            }
+
+            const alvo = message.mentions.users.first();
+            const idAlvo = alvo?.id || message.content.trim().split(/\s+/)[1];
+
+            if (!idAlvo) {
+                return message.reply('Use: p!purgemember @membro  (ou p!purgemember ID_do_usuário)');
+            }
+
+            const aviso = await message.reply(
+                `🔎 Procurando mensagens de <@${idAlvo}> em todos os canais... isso pode demorar um pouco.`
+            );
+
+            let totalApagadas = 0;
+            let canaisComErro = 0;
+            const QUATORZE_DIAS_MS = 14 * 24 * 60 * 60 * 1000;
+
+            const canais = message.guild.channels.cache.filter(
+                c => c.type === ChannelType.GuildText || c.type === ChannelType.GuildAnnouncement
+            );
+
+            for (const [, canal] of canais) {
+                try {
+                    const permissoesBot = canal.permissionsFor(message.guild.members.me);
+                    if (
+                        !permissoesBot?.has(PermissionsBitField.Flags.ViewChannel) ||
+                        !permissoesBot?.has(PermissionsBitField.Flags.ManageMessages) ||
+                        !permissoesBot?.has(PermissionsBitField.Flags.ReadMessageHistory)
+                    ) {
+                        continue;
+                    }
+
+                    let ultimoId;
+                    let continuar = true;
+
+                    while (continuar) {
+                        const opcoes = { limit: 100 };
+                        if (ultimoId) opcoes.before = ultimoId;
+
+                        const mensagens = await canal.messages.fetch(opcoes);
+                        if (mensagens.size === 0) break;
+
+                        ultimoId = mensagens.last().id;
+
+                        const doMembro = mensagens.filter(m => m.author.id === idAlvo);
+
+                        if (doMembro.size > 0) {
+                            const recentes = doMembro.filter(m => Date.now() - m.createdTimestamp < QUATORZE_DIAS_MS);
+                            const antigas = doMembro.filter(m => Date.now() - m.createdTimestamp >= QUATORZE_DIAS_MS);
+
+                            if (recentes.size > 0) {
+                                try {
+                                    const apagadas = await canal.bulkDelete(recentes, true);
+                                    totalApagadas += apagadas.size;
+                                } catch (erro) {
+                                    for (const [, msg] of recentes) {
+                                        await msg.delete().catch(() => {});
+                                        totalApagadas++;
+                                    }
+                                }
+                            }
+
+                            for (const [, msg] of antigas) {
+                                await msg.delete().catch(() => {});
+                                totalApagadas++;
+                            }
+                        }
+
+                        if (mensagens.size < 100) continuar = false;
+                    }
+                } catch (erro) {
+                    canaisComErro++;
+                    console.error(`Erro ao apagar mensagens no canal ${canal.name}:`, erro);
+                }
+            }
+
+            return aviso.edit(
+                `✅ Concluído! **${totalApagadas}** mensagens de <@${idAlvo}> apagadas em todos os canais de texto` +
+                (canaisComErro > 0 ? ` (${canaisComErro} canal(is) com erro ou sem permissão).` : '.')
+            );
+        }
+
+
+
         // Slowmode
         if (message.content.startsWith('p!slowmode')) {
 
@@ -1320,8 +2198,9 @@ client.on('messageCreate', async (message) => {
                 .join(' ')
                 .trim() || 'Sem motivo especificado';
 
-            const totalAtual = (avisos.get(alvo.id) || 0) + 1;
-            avisos.set(alvo.id, totalAtual);
+            const listaAtual = avisos.get(alvo.id) || [];
+            listaAtual.push({ motivo, autorId: message.author.id, data: Date.now() });
+            avisos.set(alvo.id, listaAtual);
             salvarDados();
 
             alvo.send(
@@ -1329,8 +2208,157 @@ client.on('messageCreate', async (message) => {
             ).catch(() => {});
 
             return message.channel.send(
-                `⚠️ **${alvo.username}** foi avisado(a). Motivo: ${motivo}\nTotal de avisos: ${totalAtual}`
+                `⚠️ **${alvo.username}** foi avisado(a). Motivo: ${motivo}\nTotal de avisos: ${listaAtual.length}`
             );
+        }
+
+        // Histórico de avisos de um membro
+        if (message.content.startsWith('p!warnings')) {
+            const alvo = message.mentions.users.first() || message.author;
+
+            // só precisa de permissão pra ver o histórico de OUTRA pessoa
+            if (alvo.id !== message.author.id && !temPermissao(message, PermissionsBitField.Flags.ModerateMembers)) {
+                return message.reply('❌ Sem permissão.');
+            }
+
+            const lista = avisos.get(alvo.id) || [];
+
+            if (lista.length === 0) {
+                return message.reply(`✅ **${alvo.username}** não tem nenhum aviso registrado.`);
+            }
+
+            const ultimos = lista.slice(-10);
+            const primeiroNumero = lista.length - ultimos.length + 1;
+
+            const linhas = ultimos.map((aviso, i) => {
+                const dataTexto = aviso.data ? `<t:${Math.floor(aviso.data / 1000)}:d>` : 'data desconhecida';
+                return `**${primeiroNumero + i}.** ${aviso.motivo} _(${dataTexto})_`;
+            }).join('\n');
+
+            const embed = new EmbedBuilder()
+                .setTitle(`⚠️ Histórico de avisos — ${alvo.username}`)
+                .setColor(0xFFA500)
+                .setDescription(linhas)
+                .setFooter({
+                    text: `Total: ${lista.length} aviso(s)` + (lista.length > 10 ? ' (mostrando os 10 mais recentes)' : '')
+                });
+
+            return message.channel.send({ embeds: [embed] });
+        }
+
+        // Banir
+        if (message.content.startsWith('p!ban')) {
+
+            if (!temPermissao(message, PermissionsBitField.Flags.BanMembers)) {
+                return message.reply('❌ Sem permissão.');
+            }
+
+            const alvo = message.mentions.users.first();
+
+            if (!alvo) {
+                return message.reply('Use: p!ban @user motivo(opcional)');
+            }
+
+            const motivo = message.content.split(/\s+/).slice(2).join(' ').trim() || 'Sem motivo especificado';
+
+            const membroAlvo = await message.guild.members.fetch(alvo.id).catch(() => null);
+            if (membroAlvo && !membroAlvo.bannable) {
+                return message.reply('❌ Não consigo banir essa pessoa (cargo dela é igual ou maior que o meu, ou é o dono do servidor).');
+            }
+
+            alvo.send(`🔨 Você foi banido(a) de **${message.guild.name}**.\nMotivo: ${motivo}`).catch(() => {});
+
+            await message.guild.members.ban(alvo.id, { reason: motivo });
+
+            return message.channel.send(`🔨 **${alvo.username}** foi banido(a). Motivo: ${motivo}`);
+        }
+
+        // Desbanir
+        if (message.content.startsWith('p!unban')) {
+
+            if (!temPermissao(message, PermissionsBitField.Flags.BanMembers)) {
+                return message.reply('❌ Sem permissão.');
+            }
+
+            const idAlvo = message.content.trim().split(/\s+/)[1];
+
+            if (!idAlvo) {
+                return message.reply('Use: p!unban ID_do_usuário');
+            }
+
+            try {
+                await message.guild.members.unban(idAlvo);
+                return message.channel.send(`✅ Usuário <@${idAlvo}> foi desbanido(a).`);
+            } catch (erro) {
+                return message.reply('❌ Não consegui desbanir esse ID (confere se está certo e se a pessoa está mesmo banida).');
+            }
+        }
+
+        // Mutar (timeout nativo do Discord) por um tempo determinado
+        if (message.content.startsWith('p!mute')) {
+
+            if (!temPermissao(message, PermissionsBitField.Flags.ModerateMembers)) {
+                return message.reply('❌ Sem permissão.');
+            }
+
+            const alvo = message.mentions.users.first();
+            const partes = message.content.trim().split(/\s+/);
+            const duracaoStr = partes[2];
+            const motivo = partes.slice(3).join(' ').trim() || 'Sem motivo especificado';
+
+            if (!alvo || !duracaoStr) {
+                return message.reply('Use: p!mute @user duração motivo(opcional)\nExemplo: p!mute @user 10m spam');
+            }
+
+            const duracaoMs = parseDuracaoMs(duracaoStr);
+
+            if (!duracaoMs) {
+                return message.reply('Duração inválida. Use algo como 30s, 10m, 2h ou 1d.');
+            }
+
+            if (duracaoMs > 28 * 24 * 60 * 60 * 1000) {
+                return message.reply('❌ O Discord só permite mutar por no máximo 28 dias.');
+            }
+
+            const membroAlvo = await message.guild.members.fetch(alvo.id).catch(() => null);
+
+            if (!membroAlvo) {
+                return message.reply('❌ Não encontrei esse membro no servidor.');
+            }
+
+            if (!membroAlvo.moderatable) {
+                return message.reply('❌ Não consigo mutar essa pessoa (cargo dela é igual ou maior que o meu).');
+            }
+
+            await membroAlvo.timeout(duracaoMs, motivo);
+
+            return message.channel.send(
+                `🔇 **${alvo.username}** foi mutado(a) por ${duracaoStr}. Motivo: ${motivo}`
+            );
+        }
+
+        // Desmutar (remove o timeout antes do tempo acabar)
+        if (message.content.startsWith('p!desmutar') || message.content.startsWith('p!unmute')) {
+
+            if (!temPermissao(message, PermissionsBitField.Flags.ModerateMembers)) {
+                return message.reply('❌ Sem permissão.');
+            }
+
+            const alvo = message.mentions.users.first();
+
+            if (!alvo) {
+                return message.reply('Use: p!desmutar @user');
+            }
+
+            const membroAlvo = await message.guild.members.fetch(alvo.id).catch(() => null);
+
+            if (!membroAlvo) {
+                return message.reply('❌ Não encontrei esse membro no servidor.');
+            }
+
+            await membroAlvo.timeout(null).catch(() => {});
+
+            return message.channel.send(`🔊 **${alvo.username}** foi desmutado(a).`);
         }
 
         // Info do usuário
@@ -1690,6 +2718,62 @@ client.on('messageCreate', async (message) => {
         }
 
         // Sessão — agenda as chamadas automáticas (1/3, 2/3, 3/3) pra um horário (GMT-3)
+        // Cancelar a sessão agendada
+        if (message.content === 'p!sessão cancelar' || message.content === 'p!sessao cancelar') {
+
+            if (!temPermissao(message, PermissionsBitField.Flags.ManageMessages)) {
+                return message.reply('❌ Sem permissão.');
+            }
+
+            if (!message.guild) {
+                return message.reply('❌ Esse comando só funciona dentro de um servidor.');
+            }
+
+            if (!sessoesAtivas.has(message.guild.id)) {
+                return message.reply('❌ Não tem nenhuma sessão agendada nesse servidor.');
+            }
+
+            sessoesAtivas.delete(message.guild.id);
+            salvarDados();
+
+            return message.reply('🗑️ Sessão cancelada. Nenhuma chamada vai ser enviada.');
+        }
+
+        // Ver status da sessão agendada
+        if (message.content === 'p!sessão status' || message.content === 'p!sessao status') {
+
+            if (!message.guild) {
+                return message.reply('❌ Esse comando só funciona dentro de um servidor.');
+            }
+
+            const sessao = sessoesAtivas.get(message.guild.id);
+
+            if (!sessao) {
+                return message.reply('📭 Não tem nenhuma sessão agendada nesse servidor no momento.');
+            }
+
+            let etapa;
+            if (!sessao.enviouChamada1) etapa = 'Aguardando a chamada 1/3';
+            else if (!sessao.enviouChamada2) etapa = 'Chamada 1/3 já enviada — aguardando a 2/3';
+            else if (!sessao.enviouChamada3) etapa = 'Chamada 2/3 já enviada — aguardando a 3/3 (fechamento)';
+            else etapa = 'Concluída (aguardando limpeza)';
+
+            return message.reply(
+                `📋 **Status da sessão**\n` +
+                `Horário: ${sessao.horario} (GMT-3) — <t:${Math.floor(sessao.alvoMs / 1000)}:R>\n` +
+                `Etapa atual: ${etapa}\n` +
+                `Presentes até agora: ${sessao.presentes.length}`
+            );
+        }
+
+        // Ver quantas faltas seguidas alguém tem nas chamadas de sessão
+        if (message.content.startsWith('p!faltas')) {
+            const alvo = message.mentions.users.first() || message.author;
+            const total = faltasSessao[alvo.id] || 0;
+
+            return message.reply(`📉 **${alvo.username}** está com **${total}/3** faltas seguidas nas chamadas de sessão.`);
+        }
+
         if (message.content.startsWith('p!sessão ') || message.content.startsWith('p!sessao ')) {
 
             if (!temPermissao(message, PermissionsBitField.Flags.ManageMessages)) {
@@ -2367,6 +3451,20 @@ client.on('messageCreate', async (message) => {
                 embed.addFields({ name: '📄 Dívida ativa', value: formatarMoeda(calcularDividaAtual(conta)), inline: true });
             }
 
+            if (conta.tituloAtivo) {
+                const titulo = pegarTitulo(conta.tituloAtivo);
+                embed.addFields({ name: '🏷️ Título', value: titulo ? titulo.nome : conta.tituloAtivo, inline: true });
+            }
+
+            if (conta.miraculousComprados.length > 0) {
+                const listaMiraculous = conta.miraculousComprados
+                    .map(id => pegarMiraculous(id))
+                    .filter(Boolean)
+                    .map(m => `${m.emoji} ${m.nome}`)
+                    .join('\n');
+                embed.addFields({ name: '✨ Miraculous', value: listaMiraculous || '—', inline: false });
+            }
+
             return message.reply({ embeds: [embed] });
         }
 
@@ -2542,17 +3640,44 @@ client.on('messageCreate', async (message) => {
 
         // Divorciar
         if (message.content === 'p!divorciar') {
-            const conta = pegarConta(message.author.id);
+            const meuId = message.author.id;
+            const contaBruta = economia[meuId];
 
-            if (!conta.casadoCom) {
+            if (!contaBruta || !contaBruta.casadoCom) {
                 return message.reply('❌ Você não está casado(a) com ninguém.');
             }
 
-            const exParceiroId = conta.casadoCom;
-            const contaExParceiro = pegarConta(exParceiroId);
+            const exParceiroId = contaBruta.casadoCom;
+            if (!economia[exParceiroId]) economia[exParceiroId] = pegarConta(exParceiroId);
+            const contaExBruta = economia[exParceiroId];
 
-            conta.casadoCom = null;
-            contaExParceiro.casadoCom = null;
+            let fusaoDesfeita = false;
+
+            // Se tinham o anel de noivado (conta conjunta), desfaz a fusão e
+            // divide o saldo compartilhado meio a meio entre os dois.
+            if (contaBruta.contaConjuntaCom) {
+                const chave = chaveCasal(meuId, exParceiroId);
+                const compartilhada = contasConjuntas[chave];
+
+                if (compartilhada) {
+                    const metadeCarteira = Math.floor(compartilhada.carteira / 2);
+                    const metadeBanco = Math.floor(compartilhada.banco / 2);
+
+                    contaBruta.carteira = metadeCarteira + (compartilhada.carteira % 2);
+                    contaBruta.banco = metadeBanco + (compartilhada.banco % 2);
+                    contaExBruta.carteira = metadeCarteira;
+                    contaExBruta.banco = metadeBanco;
+
+                    delete contasConjuntas[chave];
+                    fusaoDesfeita = true;
+                }
+
+                contaBruta.contaConjuntaCom = null;
+                contaExBruta.contaConjuntaCom = null;
+            }
+
+            contaBruta.casadoCom = null;
+            contaExBruta.casadoCom = null;
             salvarDados();
 
             let nomeExParceiro = 'seu(sua) ex';
@@ -2564,9 +3689,624 @@ client.on('messageCreate', async (message) => {
             const embed = new EmbedBuilder()
                 .setTitle('💔 Divórcio')
                 .setColor(0x99AAB5)
-                .setDescription(`**${message.author.username}** e **${nomeExParceiro}** se divorciaram.`);
+                .setDescription(
+                    `**${message.author.username}** e **${nomeExParceiro}** se divorciaram.` +
+                    (fusaoDesfeita ? '\n💰 A conta conjunta (anel de noivado) foi desfeita — o saldo foi dividido meio a meio.' : '')
+                );
 
             return message.reply({ embeds: [embed] });
+        }
+
+        // Loja (com categorias e páginas — navegação por botões e select menu)
+        if (message.content === 'p!loja') {
+            let categoriaIndex = 0;
+            let pagina = 0;
+
+            const inicial = construirEmbedLoja(categoriaIndex, pagina);
+            pagina = inicial.pagina;
+
+            const msgLoja = await message.channel.send({
+                embeds: [inicial.embed],
+                components: construirComponentesLoja(categoriaIndex, pagina, inicial.totalPaginas, inicial.fatia, inicial.inicio)
+            });
+
+            const coletor = msgLoja.createMessageComponentCollector({ time: 3 * 60 * 1000 });
+
+            coletor.on('collect', async (interacao) => {
+                if (interacao.user.id !== message.author.id) {
+                    return interacao.reply({ content: '❌ Só quem abriu a loja pode navegar. Use `p!loja` pra abrir a sua.', ephemeral: true });
+                }
+
+                // Botão verde de compra rápida
+                if (interacao.customId.startsWith('loja_comprar_')) {
+                    const [, , catIdxStr, itemIdxStr] = interacao.customId.split('_');
+                    const categoria = LOJA_CATEGORIAS[parseInt(catIdxStr, 10)];
+                    const item = categoria?.itens[parseInt(itemIdxStr, 10)];
+
+                    if (!item) {
+                        return interacao.reply({ content: '❌ Esse item não existe mais. Abra a loja de novo com `p!loja`.', ephemeral: true });
+                    }
+
+                    await executarCompraDireta({
+                        autorId: interacao.user.id,
+                        autorUsername: interacao.user.username,
+                        responderErro: (texto) => interacao.reply({ content: texto, ephemeral: true }),
+                        enviarPublico: (texto) => interacao.reply({ content: texto })
+                    }, item);
+
+                    return;
+                }
+
+                // Botão cinza "Ver comando" — itens que precisam de argumento extra (vip/emoji)
+                if (interacao.customId.startsWith('loja_vercomando_')) {
+                    const [, , catIdxStr, itemIdxStr] = interacao.customId.split('_');
+                    const categoria = LOJA_CATEGORIAS[parseInt(catIdxStr, 10)];
+                    const item = categoria?.itens[parseInt(itemIdxStr, 10)];
+
+                    if (!item) {
+                        return interacao.reply({ content: '❌ Esse item não existe mais. Abra a loja de novo com `p!loja`.', ephemeral: true });
+                    }
+
+                    return interacao.reply({ content: `Use: \`${item.comando}\``, ephemeral: true });
+                }
+
+                if (interacao.customId === 'loja_categoria') {
+                    categoriaIndex = parseInt(interacao.values[0], 10);
+                    pagina = 0;
+                } else if (interacao.customId === 'loja_anterior') {
+                    pagina = Math.max(0, pagina - 1);
+                } else if (interacao.customId === 'loja_proximo') {
+                    pagina += 1;
+                }
+
+                const atualizado = construirEmbedLoja(categoriaIndex, pagina);
+                pagina = atualizado.pagina;
+
+                await interacao.update({
+                    embeds: [atualizado.embed],
+                    components: construirComponentesLoja(categoriaIndex, pagina, atualizado.totalPaginas, atualizado.fatia, atualizado.inicio)
+                });
+            });
+
+            coletor.on('end', () => {
+                msgLoja.edit({ components: [] }).catch(() => {});
+            });
+
+            return;
+        }
+
+        // Comprar item da loja
+        if (message.content.startsWith('p!comprar')) {
+            const argumentos = message.content.slice('p!comprar'.length).trim();
+            const [itemBruto, ...resto] = argumentos.split(/\s+/);
+            const item = (itemBruto || '').toLowerCase();
+            const argsRestantes = resto.join(' ').trim();
+
+            if (!item) {
+                return message.reply('Use: p!comprar <item>\nVeja os itens disponíveis com `p!loja`.');
+            }
+
+            // --- Cargo VIP personalizado ---
+            if (item === 'vip') {
+                if (!message.guild) return message.reply('❌ Esse comando só funciona dentro de um servidor.');
+
+                const [nomeCargoBruto, corBruta] = argsRestantes.split('|').map(p => p?.trim());
+
+                if (!nomeCargoBruto || !corBruta) {
+                    return message.reply('Use: p!comprar vip Nome do Cargo | #FF00AA');
+                }
+
+                if (nomeCargoBruto.length > 100) {
+                    return message.reply('❌ Nome do cargo muito longo (máximo 100 caracteres).');
+                }
+
+                const corHex = corBruta.startsWith('#') ? corBruta : `#${corBruta}`;
+                if (!/^#[0-9A-Fa-f]{6}$/.test(corHex)) {
+                    return message.reply('❌ Cor inválida. Use um código hexadecimal, tipo #FF00AA.');
+                }
+
+                const conta = pegarConta(message.author.id);
+
+                if (conta.carteira < PRECO_VIP) {
+                    return message.reply(`❌ O cargo VIP custa ${formatarMoeda(PRECO_VIP)} e você não tem esse valor. Carteira: ${formatarMoeda(conta.carteira)}`);
+                }
+
+                if (!message.guild.members.me.permissions.has(PermissionsBitField.Flags.ManageRoles)) {
+                    return message.reply('❌ Não tenho permissão de Gerenciar Cargos nesse servidor.');
+                }
+
+                try {
+                    let cargo = conta.cargoVipId ? await message.guild.roles.fetch(conta.cargoVipId).catch(() => null) : null;
+
+                    if (cargo) {
+                        if (cargo.position >= message.guild.members.me.roles.highest.position) {
+                            return message.reply('❌ Não consigo editar esse cargo (ele está numa posição igual ou acima do meu cargo mais alto).');
+                        }
+                        await cargo.setName(nomeCargoBruto);
+                        await cargo.setColor(corHex);
+                    } else {
+                        cargo = await message.guild.roles.create({
+                            name: nomeCargoBruto,
+                            color: corHex,
+                            hoist: true,
+                            mentionable: false,
+                            reason: `Cargo VIP comprado na loja por ${message.author.tag}`
+                        });
+
+                        const membro = await message.guild.members.fetch(message.author.id);
+                        await membro.roles.add(cargo);
+                    }
+
+                    // Sobe o cargo VIP pro topo possível (logo abaixo do cargo mais alto
+                    // do bot), assim ele aparece destacado/hoisted no topo da lista de
+                    // membros, com cor e (se o servidor tiver boost nível 2+) ícone.
+                    try {
+                        const posicaoTopo = message.guild.members.me.roles.highest.position - 1;
+                        if (posicaoTopo > 0 && cargo.position < posicaoTopo) {
+                            await cargo.setPosition(posicaoTopo);
+                        }
+                    } catch (erro) {
+                        console.error('Erro ao reposicionar cargo VIP no topo:', erro);
+                    }
+
+                    conta.carteira -= PRECO_VIP;
+                    conta.cargoVipId = cargo.id;
+                    salvarDados();
+
+                    return message.channel.send(`👑 **${message.author.username}** comprou/atualizou o cargo VIP: **${nomeCargoBruto}** (${corHex})!`);
+                } catch (erro) {
+                    console.error('Erro ao criar/editar cargo VIP:', erro);
+                    return message.reply('❌ Deu erro ao criar/editar o cargo. Confere se meu cargo está acima da posição desejada.');
+                }
+            }
+
+            // --- Emoji personalizado ---
+            if (item === 'emoji') {
+                if (!message.guild) return message.reply('❌ Esse comando só funciona dentro de um servidor.');
+
+                const nomeEmoji = argsRestantes.replace(/[^a-zA-Z0-9_]/g, '');
+                const anexo = message.attachments.first();
+
+                if (!nomeEmoji || !anexo) {
+                    return message.reply('Use: p!comprar emoji nome_do_emoji (com uma imagem anexada na mesma mensagem)');
+                }
+
+                if (nomeEmoji.length < 2 || nomeEmoji.length > 32) {
+                    return message.reply('❌ O nome do emoji precisa ter entre 2 e 32 caracteres (só letras, números e _).');
+                }
+
+                const conta = pegarConta(message.author.id);
+
+                if (conta.carteira < PRECO_EMOJI) {
+                    return message.reply(`❌ O emoji personalizado custa ${formatarMoeda(PRECO_EMOJI)} e você não tem esse valor. Carteira: ${formatarMoeda(conta.carteira)}`);
+                }
+
+                try {
+                    const emojiCriado = await message.guild.emojis.create({
+                        attachment: anexo.url,
+                        name: nomeEmoji,
+                        reason: `Emoji comprado na loja por ${message.author.tag}`
+                    });
+
+                    conta.carteira -= PRECO_EMOJI;
+                    salvarDados();
+
+                    return message.channel.send(`😎 **${message.author.username}** adicionou o emoji ${emojiCriado} (\`:${nomeEmoji}:\`) ao servidor!`);
+                } catch (erro) {
+                    console.error('Erro ao criar emoji:', erro);
+                    return message.reply('❌ Deu erro ao criar o emoji. Confere se o servidor não atingiu o limite de emojis, se eu tenho permissão, e se a imagem é válida (PNG/JPG/GIF, até 256KB).');
+                }
+            }
+
+            // --- Anel de noivado (funde a conta com a do cônjuge) ---
+            if (item === 'anel') {
+                return executarCompraAnel({
+                    autorId: message.author.id,
+                    autorUsername: message.author.username,
+                    responderErro: (texto) => message.reply(texto),
+                    enviarPublico: (texto) => message.channel.send(texto)
+                });
+            }
+
+            // --- Título (aparece do lado do apelido) ---
+            if (item === 'titulo' || item === 'título') {
+                const idTitulo = argsRestantes.trim().toLowerCase();
+                return executarCompraTitulo({
+                    autorId: message.author.id,
+                    autorUsername: message.author.username,
+                    responderErro: (texto) => message.reply(texto),
+                    enviarPublico: (texto) => message.channel.send(texto)
+                }, idTitulo);
+            }
+
+            // --- Miraculous (dá acesso a um poder de combate) ---
+            if (item === 'miraculous') {
+                const idMiraculous = argsRestantes.trim().toLowerCase();
+                return executarCompraMiraculous({
+                    autorId: message.author.id,
+                    autorUsername: message.author.username,
+                    responderErro: (texto) => message.reply(texto),
+                    enviarPublico: (texto) => message.channel.send(texto)
+                }, idMiraculous);
+            }
+
+            return message.reply('❌ Item inválido. Veja os itens disponíveis com `p!loja`.');
+        }
+
+        // Equipar/remover título comprado (aparece do lado do apelido)
+        if (message.content.startsWith('p!titulo') || message.content.startsWith('p!título')) {
+            const partes = message.content.trim().split(/\s+/);
+            const argumento = (partes[1] || '').toLowerCase();
+            const conta = pegarConta(message.author.id);
+
+            if (!argumento) {
+                if (conta.titulosComprados.length === 0) {
+                    return message.reply('❌ Você ainda não comprou nenhum título. Veja a loja com `p!loja`.');
+                }
+                return message.reply(
+                    'Use: p!titulo <id> (pra equipar) ou p!titulo remover (pra tirar)\nSeus títulos:\n' +
+                    conta.titulosComprados.map(id => `\`${id}\` — ${pegarTitulo(id)?.nome || id}`).join('\n')
+                );
+            }
+
+            if (argumento === 'remover') {
+                conta.tituloAtivo = null;
+                salvarDados();
+                await aplicarTituloNoApelido(message, conta);
+                return message.reply('✅ Título removido do seu apelido.');
+            }
+
+            if (!conta.titulosComprados.includes(argumento)) {
+                return message.reply('❌ Você não tem esse título. Compre na loja com `p!comprar titulo <id>`.');
+            }
+
+            conta.tituloAtivo = argumento;
+            salvarDados();
+            await aplicarTituloNoApelido(message, conta);
+
+            const titulo = pegarTitulo(argumento);
+            return message.reply(`✅ Título equipado: **${titulo ? titulo.nome : argumento}**`);
+        }
+
+        // Trabalhar: renda pequena e segura, com cooldown
+        if (message.content === 'p!trabalhar') {
+            const conta = pegarConta(message.author.id);
+            const agora = Date.now();
+            const desde = agora - conta.ultimoTrabalho;
+
+            if (conta.ultimoTrabalho !== 0 && desde < TRABALHO_COOLDOWN_MS) {
+                const faltamMin = Math.ceil((TRABALHO_COOLDOWN_MS - desde) / 60000);
+                return message.reply(`⏳ Você já trabalhou recentemente. Tente de novo em ~${faltamMin} min.`);
+            }
+
+            const ganho = Math.floor(Math.random() * (TRABALHO_MAX - TRABALHO_MIN + 1)) + TRABALHO_MIN;
+            conta.ultimoTrabalho = agora;
+            conta.carteira += ganho;
+            salvarDados();
+
+            const bicos = ['entregou uns panfletos', 'ajudou numa mudança', 'fez um bico de motorista', 'lavou uns carros', 'passeou com cachorros do bairro'];
+            const bico = bicos[Math.floor(Math.random() * bicos.length)];
+
+            return message.reply(`💼 Você ${bico} e ganhou ${formatarMoeda(ganho)}!`);
+        }
+
+        // Crime: 60% de chance de dar errado e ficar devendo (dívida vira negativo na carteira)
+        if (message.content === 'p!crime') {
+            const conta = pegarConta(message.author.id);
+            const agora = Date.now();
+            const desde = agora - conta.ultimoCrime;
+
+            if (conta.ultimoCrime !== 0 && desde < CRIME_COOLDOWN_MS) {
+                const faltamMin = Math.ceil((CRIME_COOLDOWN_MS - desde) / 60000);
+                return message.reply(`⏳ Muito arriscado tentar de novo agora. Tente em ~${faltamMin} min.`);
+            }
+
+            conta.ultimoCrime = agora;
+            const deuCerto = Math.random() < CRIME_CHANCE_SUCESSO;
+
+            if (deuCerto) {
+                const ganho = Math.floor(Math.random() * (CRIME_GANHO_MAX - CRIME_GANHO_MIN + 1)) + CRIME_GANHO_MIN;
+                conta.carteira += ganho;
+                salvarDados();
+                return message.reply(`🕵️ O crime deu certo! Você ganhou ${formatarMoeda(ganho)}.`);
+            }
+
+            const multa = Math.floor(Math.random() * (CRIME_MULTA_MAX - CRIME_MULTA_MIN + 1)) + CRIME_MULTA_MIN;
+            conta.carteira -= multa; // pode ficar negativo — a pessoa fica devendo
+            salvarDados();
+
+            return message.reply(
+                `🚨 Você foi pego! Pagou ${formatarMoeda(multa)} de multa.` +
+                (conta.carteira < 0 ? `\n💸 Sua carteira ficou negativa: ${formatarMoeda(conta.carteira)} (você está devendo).` : '')
+            );
+        }
+
+        // ---------- Poderes dos Miraculous ----------
+
+        // Joaninha — Talismã: prende (muta) o alvo por 20s
+        if (comandoBate(message.content, 'p!talisma')) {
+            const conta = pegarConta(message.author.id);
+            if (!temMiraculous(conta, 'joaninha')) return message.reply('❌ Você precisa do Miraculous da Joaninha pra usar esse poder.');
+
+            const cooldownJoaninha = pegarCooldownRestante(message, conta, 'joaninha');
+            if (cooldownJoaninha > 0) return message.reply(`⏳ O Talismã está em cooldown. Tente novamente em ${formatarTempoRestante(cooldownJoaninha)}.`);
+
+            const alvo = message.mentions.users.first();
+            if (!alvo) return message.reply('Use: p!talismã @pessoa');
+
+            registrarUsoPoder(conta, 'joaninha');
+            salvarDados();
+
+            const frase = `🐞 **${message.author.username}** usou o talismã e prendeu **${alvo.username}**!`;
+            const resultado = await aplicarAtaqueMute(message, alvo, 20000, frase);
+            return message.channel.send(resultado);
+        }
+
+        // Gato — Cataclismo: apaga a mensagem que o usuário está respondendo
+        if (comandoBate(message.content, 'p!cataclismo')) {
+            const conta = pegarConta(message.author.id);
+            if (!temMiraculous(conta, 'gato')) return message.reply('❌ Você precisa do Miraculous do Gato pra usar esse poder.');
+
+            const cooldownGato = pegarCooldownRestante(message, conta, 'gato');
+            if (cooldownGato > 0) return message.reply(`⏳ O Cataclismo está em cooldown. Tente novamente em ${formatarTempoRestante(cooldownGato)}.`);
+
+            const refId = message.reference?.messageId;
+            if (!refId) return message.reply('❌ Responda a mensagem que você quer apagar e use `p!cataclismo`.');
+
+            try {
+                const msgAlvo = await message.channel.messages.fetch(refId);
+                await msgAlvo.delete();
+                registrarUsoPoder(conta, 'gato');
+                salvarDados();
+                return message.channel.send(`🐈‍⬛ **${message.author.username}** usou o cataclismo e apagou a mensagem!`);
+            } catch (erro) {
+                console.error('Erro ao usar cataclismo:', erro);
+                return message.reply('❌ Não consegui apagar essa mensagem (permissão ou ela já não existe mais).');
+            }
+        }
+
+        // Pavão — Sentimonstro: cria um aliado que absorve o próximo ataque
+        if (comandoBate(message.content, 'p!sentimonstro')) {
+            const conta = pegarConta(message.author.id);
+            if (!temMiraculous(conta, 'pavao')) return message.reply('❌ Você precisa do Miraculous do Pavão pra usar esse poder.');
+
+            const cooldownPavao = pegarCooldownRestante(message, conta, 'pavao');
+            if (cooldownPavao > 0) return message.reply(`⏳ O Sentimonstro está em cooldown. Tente novamente em ${formatarTempoRestante(cooldownPavao)}.`);
+
+            conta.escudoTartaruga += 1;
+            registrarUsoPoder(conta, 'pavao');
+            salvarDados();
+
+            return message.channel.send(`🦚 **${message.author.username}** invocou um Sentimonstro, que vai tomar o próximo ataque no lugar dele.`);
+        }
+
+        // Raposa — Miragem: por um tempo, mostra um alvo falso ao usar comandos
+        if (comandoBate(message.content, 'p!miragem')) {
+            const conta = pegarConta(message.author.id);
+            if (!temMiraculous(conta, 'raposa')) return message.reply('❌ Você precisa do Miraculous da Raposa pra usar esse poder.');
+
+            const cooldownRaposa = pegarCooldownRestante(message, conta, 'raposa');
+            if (cooldownRaposa > 0) return message.reply(`⏳ A Miragem está em cooldown. Tente novamente em ${formatarTempoRestante(cooldownRaposa)}.`);
+
+            conta.ilusaoAte = Date.now() + 5 * 60 * 1000;
+            registrarUsoPoder(conta, 'raposa');
+            salvarDados();
+
+            return message.channel.send(`🦊 **${message.author.username}** criou uma ilusão! Por 5 minutos, seus próximos ataques podem mostrar um alvo falso.`);
+        }
+
+        // Abelha — Ferroada: paralisa (muta) o alvo por 20s
+        if (comandoBate(message.content, 'p!ferroada')) {
+            const conta = pegarConta(message.author.id);
+            if (!temMiraculous(conta, 'abelha')) return message.reply('❌ Você precisa do Miraculous da Abelha pra usar esse poder.');
+
+            const cooldownAbelha = pegarCooldownRestante(message, conta, 'abelha');
+            if (cooldownAbelha > 0) return message.reply(`⏳ A Ferroada está em cooldown. Tente novamente em ${formatarTempoRestante(cooldownAbelha)}.`);
+
+            const alvo = message.mentions.users.first();
+            if (!alvo) return message.reply('Use: p!ferroada @pessoa');
+
+            registrarUsoPoder(conta, 'abelha');
+            salvarDados();
+
+            let nomeExibido = alvo.username;
+            if (conta.ilusaoAte && Date.now() <= conta.ilusaoAte && message.guild) {
+                const membrosCache = message.guild.members.cache.filter(m => !m.user.bot && m.id !== alvo.id);
+                if (membrosCache.size > 0) {
+                    nomeExibido = membrosCache.random().user.username;
+                }
+            }
+
+            const frase = `🐝 **${message.author.username}** usou a ferroada e paralisou **${nomeExibido}**!`;
+            const resultado = await aplicarAtaqueMute(message, alvo, 20000, frase);
+            return message.channel.send(resultado);
+        }
+
+        // Tartaruga — Casco-Protetor: imune aos próximos 2 ataques
+        if (comandoBate(message.content, 'p!protecao')) {
+            const conta = pegarConta(message.author.id);
+            if (!temMiraculous(conta, 'tartaruga')) return message.reply('❌ Você precisa do Miraculous da Tartaruga pra usar esse poder.');
+
+            const cooldownTartaruga = pegarCooldownRestante(message, conta, 'tartaruga');
+            if (cooldownTartaruga > 0) return message.reply(`⏳ O Casco-Protetor está em cooldown. Tente novamente em ${formatarTempoRestante(cooldownTartaruga)}.`);
+
+            conta.escudoTartaruga += 2;
+            registrarUsoPoder(conta, 'tartaruga');
+            salvarDados();
+
+            return message.channel.send(`🐢 **${message.author.username}** ergueu um Casco-Protetor! Imune aos próximos 2 ataques.`);
+        }
+
+        // Cavalo — Viagem: troca de posição com alguém aleatório do chat pra receber o próximo ataque no lugar dela
+        if (comandoBate(message.content, 'p!viajar')) {
+            const conta = pegarConta(message.author.id);
+            if (!temMiraculous(conta, 'cavalo')) return message.reply('❌ Você precisa do Miraculous do Cavalo pra usar esse poder.');
+
+            const cooldownCavalo = pegarCooldownRestante(message, conta, 'cavalo');
+            if (cooldownCavalo > 0) return message.reply(`⏳ A Viagem está em cooldown. Tente novamente em ${formatarTempoRestante(cooldownCavalo)}.`);
+
+            try {
+                const recentes = await message.channel.messages.fetch({ limit: 30 });
+                const candidatos = [...new Set(
+                    recentes
+                        .filter(m => !m.author.bot && m.author.id !== message.author.id)
+                        .map(m => m.author.id)
+                )];
+
+                if (candidatos.length === 0) {
+                    return message.reply('❌ Não achei ninguém recente no chat pra trocar de lugar.');
+                }
+
+                const sorteadoId = candidatos[Math.floor(Math.random() * candidatos.length)];
+                conta.redirecionarAtaquePara = sorteadoId;
+                conta.redirecionarAte = Date.now() + 60 * 1000;
+                registrarUsoPoder(conta, 'cavalo');
+                salvarDados();
+
+                let nomeSorteado = 'alguém';
+                try {
+                    const usuario = await client.users.fetch(sorteadoId);
+                    nomeSorteado = usuario.username;
+                } catch (_) {}
+
+                return message.channel.send(`🐴 **${message.author.username}** abriu um portal! Pelo próximo minuto, quem receber o próximo ataque destinado a ele(a) será **${nomeSorteado}**.`);
+            } catch (erro) {
+                console.error('Erro ao usar viagem:', erro);
+                return message.reply('❌ Deu erro ao abrir o portal.');
+            }
+        }
+
+        // Cobra — Segunda Chance: cancela o próximo efeito negativo em até 30s
+        if (comandoBate(message.content, 'p!segunda-chance') || comandoBate(message.content, 'p!segundachance')) {
+            const conta = pegarConta(message.author.id);
+            if (!temMiraculous(conta, 'cobra')) return message.reply('❌ Você precisa do Miraculous da Cobra pra usar esse poder.');
+
+            const cooldownCobra = pegarCooldownRestante(message, conta, 'cobra');
+            if (cooldownCobra > 0) return message.reply(`⏳ A Segunda Chance está em cooldown. Tente novamente em ${formatarTempoRestante(cooldownCobra)}.`);
+
+            conta.segundaChanceAte = Date.now() + 30 * 1000;
+            registrarUsoPoder(conta, 'cobra');
+            salvarDados();
+
+            return message.channel.send(`🐍 **${message.author.username}** usou a Segunda Chance! Qualquer efeito negativo nos próximos 30 segundos será cancelado.`);
+        }
+
+        // Boi (Stompp) — Resistência: imune a 1 golpe
+        if (comandoBate(message.content, 'p!resistencia')) {
+            const conta = pegarConta(message.author.id);
+            if (!temMiraculous(conta, 'boi')) return message.reply('❌ Você precisa do Miraculous do Boi pra usar esse poder.');
+
+            const cooldownBoi = pegarCooldownRestante(message, conta, 'boi');
+            if (cooldownBoi > 0) return message.reply(`⏳ A Resistência está em cooldown. Tente novamente em ${formatarTempoRestante(cooldownBoi)}.`);
+
+            conta.resistenciaBoi = true;
+            registrarUsoPoder(conta, 'boi');
+            salvarDados();
+
+            return message.channel.send(`🐂 **${message.author.username}** ficou imune a magia! Não pode ser afetado(a) pelo próximo golpe.`);
+        }
+
+        // Cachorro — Busca: mute de 20s no alvo
+        if (comandoBate(message.content, 'p!pega', 'p!pega!')) {
+            const conta = pegarConta(message.author.id);
+            if (!temMiraculous(conta, 'cachorro')) return message.reply('❌ Você precisa do Miraculous do Cachorro pra usar esse poder.');
+
+            const cooldownCachorro = pegarCooldownRestante(message, conta, 'cachorro');
+            if (cooldownCachorro > 0) return message.reply(`⏳ A Busca está em cooldown. Tente novamente em ${formatarTempoRestante(cooldownCachorro)}.`);
+
+            const alvo = message.mentions.users.first();
+            if (!alvo) return message.reply('Use: p!pega! @pessoa');
+
+            registrarUsoPoder(conta, 'cachorro');
+            salvarDados();
+
+            const frase = `🐶 **${message.author.username}** usou seu poder pega! e conseguiu pegar a calcinha de **${alvo.username}**, que ficou tímido demais pra falar qualquer coisa.`;
+            const resultado = await aplicarAtaqueMute(message, alvo, 20000, frase);
+            return message.channel.send(resultado);
+        }
+
+        // Tigre (Roarr) — Golpe Poderoso: apaga as últimas 8 mensagens do canal
+        if (comandoBate(message.content, 'p!colisao')) {
+            const conta = pegarConta(message.author.id);
+            if (!temMiraculous(conta, 'tigre')) return message.reply('❌ Você precisa do Miraculous do Tigre pra usar esse poder.');
+
+            const cooldownTigre = pegarCooldownRestante(message, conta, 'tigre');
+            if (cooldownTigre > 0) return message.reply(`⏳ A Colisão está em cooldown. Tente novamente em ${formatarTempoRestante(cooldownTigre)}.`);
+
+            try {
+                await message.channel.bulkDelete(8, true);
+                registrarUsoPoder(conta, 'tigre');
+                salvarDados();
+                return message.channel.send(`🐯 **${message.author.username}** desferiu um golpe devastador! As últimas mensagens foram apagadas.`);
+            } catch (erro) {
+                console.error('Erro ao usar colisão:', erro);
+                return message.reply('❌ Não consegui apagar as mensagens (preciso de permissão de Gerenciar Mensagens, e elas não podem ter mais de 14 dias).');
+            }
+        }
+
+        // Águia (Liiri) — Liberdade: remove mutes e efeitos de controle do alvo
+        if (comandoBate(message.content, 'p!libertar')) {
+            const conta = pegarConta(message.author.id);
+            if (!temMiraculous(conta, 'aguia')) return message.reply('❌ Você precisa do Miraculous da Águia pra usar esse poder.');
+
+            const cooldownAguia = pegarCooldownRestante(message, conta, 'aguia');
+            if (cooldownAguia > 0) return message.reply(`⏳ A Libertação está em cooldown. Tente novamente em ${formatarTempoRestante(cooldownAguia)}.`);
+
+            const alvo = pegarAlvo(message);
+            const contaAlvo = pegarConta(alvo.id);
+
+            contaAlvo.segundaChanceAte = 0;
+            contaAlvo.redirecionarAtaquePara = null;
+            contaAlvo.redirecionarAte = 0;
+            registrarUsoPoder(conta, 'aguia');
+            salvarDados();
+
+            if (message.guild) {
+                const membroAlvo = await message.guild.members.fetch(alvo.id).catch(() => null);
+                if (membroAlvo && membroAlvo.moderatable) {
+                    await membroAlvo.timeout(null).catch(() => {});
+                }
+            }
+
+            return message.channel.send(`🦅 **${message.author.username}** libertou **${alvo.username}** de mutes e efeitos de controle!`);
+        }
+
+        // Cabra — Gênese: chove Miracoins pras últimas 5 pessoas que falaram no canal
+        if (comandoBate(message.content, 'p!genesis')) {
+            const conta = pegarConta(message.author.id);
+            if (!temMiraculous(conta, 'cabra')) return message.reply('❌ Você precisa do Miraculous da Cabra pra usar esse poder.');
+
+            const cooldownCabra = pegarCooldownRestante(message, conta, 'cabra');
+            if (cooldownCabra > 0) return message.reply(`⏳ A Gênese está em cooldown. Tente novamente em ${formatarTempoRestante(cooldownCabra)}.`);
+
+            try {
+                const recentes = await message.channel.messages.fetch({ limit: 30 });
+                const idsUnicos = [...new Set(
+                    recentes
+                        .filter(m => !m.author.bot)
+                        .map(m => m.author.id)
+                )].slice(0, 5);
+
+                if (idsUnicos.length === 0) {
+                    return message.reply('❌ Não achei ninguém recente no chat pra chover Miracoins.');
+                }
+
+                const mencoes = [];
+                for (const id of idsUnicos) {
+                    const contaGanhador = pegarConta(id);
+                    contaGanhador.carteira += 250;
+                    mencoes.push(`<@${id}>`);
+                }
+                registrarUsoPoder(conta, 'cabra');
+                salvarDados();
+
+                return message.channel.send(
+                    `🐐 **${message.author.username}** fez chover Miracoins, ${mencoes.join(' ')} ganharam ${formatarMoeda(250)} cada!`
+                );
+            } catch (erro) {
+                console.error('Erro ao usar gênese:', erro);
+                return message.reply('❌ Deu erro ao fazer chover Miracoins.');
+            }
         }
 
         // Depositar no banco
@@ -3113,6 +4853,211 @@ client.on('messageCreate', async (message) => {
             return;
         }
 
+        // ---------- Jogo de UNO ----------
+
+        // Cancelar mesa de UNO (quem tá jogando, ou um moderador)
+        if (message.content === 'p!uno cancelar') {
+            if (!message.guild) return message.reply('❌ Esse comando só funciona dentro do servidor.');
+
+            const jogo = jogosUno.get(message.channel.id);
+            if (!jogo) return message.reply('❌ Não tem mesa de UNO nesse canal.');
+
+            const podeCancelar = jogo.jogadores.includes(message.author.id) ||
+                ehDono(message) ||
+                temPermissao(message, PermissionsBitField.Flags.ManageMessages);
+
+            if (!podeCancelar) {
+                return message.reply('❌ Só quem tá jogando (ou um moderador) pode cancelar a mesa.');
+            }
+
+            jogosUno.delete(message.channel.id);
+            return message.reply('🎮 Mesa de UNO cancelada.');
+        }
+
+        // Comprar uma carta (passa a vez)
+        if (message.content === 'p!uno comprar') {
+            if (!message.guild) return message.reply('❌ Esse comando só funciona dentro do servidor.');
+
+            const jogo = jogosUno.get(message.channel.id);
+            if (!jogo || !jogo.emAndamento) {
+                return message.reply('❌ Não tem jogo de UNO em andamento nesse canal. Use `p!uno` pra abrir uma mesa.');
+            }
+
+            const userIdVez = jogo.jogadores[jogo.indiceAtual];
+            if (message.author.id !== userIdVez) {
+                return message.reply(`❌ Não é sua vez! É a vez de **${jogo.usernames[userIdVez]}**.`);
+            }
+
+            const [cartaComprada] = comprarCartasUno(jogo, 1);
+
+            if (!cartaComprada) {
+                await message.channel.send('🃏 O baralho acabou! Ninguém pode comprar mais cartas.');
+            } else {
+                jogo.maos.get(message.author.id).push(cartaComprada);
+                await message.channel.send(`🃏 **${message.author.username}** comprou uma carta e passou a vez.`);
+                await enviarMaoUnoPorDm(jogo, message.author.id);
+            }
+
+            jogo.indiceAtual = proximoIndiceUno(jogo, false);
+            await anunciarTurnoUno(jogo, message.channel);
+            return;
+        }
+
+        // Jogar uma carta da mão
+        if (message.content.startsWith('p!uno jogar')) {
+            // Canal onde o resultado da jogada deve ser anunciado. Dentro de servidor é o
+            // próprio canal; via DM do bot, procuramos em qual servidor esse jogador tem
+            // uma partida em andamento e usamos o canal real de lá.
+            let canal = message.channel;
+
+            if (!message.guild) {
+                let canalIdEncontrado = null;
+                for (const [id, j] of jogosUno) {
+                    if (j.emAndamento && j.jogadores.includes(message.author.id)) {
+                        canalIdEncontrado = id;
+                        break;
+                    }
+                }
+
+                if (!canalIdEncontrado) {
+                    return message.reply('❌ Você não está em nenhuma partida de UNO em andamento em nenhum servidor.');
+                }
+
+                const canalReal = client.channels.cache.get(canalIdEncontrado);
+                if (!canalReal) {
+                    return message.reply('❌ Não consegui encontrar o canal do servidor onde sua partida está rolando.');
+                }
+
+                canal = canalReal;
+            }
+
+            const jogo = jogosUno.get(canal.id);
+            if (!jogo || !jogo.emAndamento) {
+                return message.reply(`❌ Não tem jogo de UNO em andamento ${message.guild ? 'nesse canal' : 'nesse servidor'}. Use \`p!uno\` pra abrir uma mesa.`);
+            }
+
+            const userIdVez = jogo.jogadores[jogo.indiceAtual];
+            if (message.author.id !== userIdVez) {
+                return message.reply(`❌ Não é sua vez! É a vez de **${jogo.usernames[userIdVez]}**.`);
+            }
+
+            const partes = message.content.trim().split(/\s+/);
+            const indiceCarta = parseInt(partes[2], 10);
+            const corEscolhida = (partes[3] || '').toLowerCase();
+            const mao = jogo.maos.get(message.author.id);
+
+            if (!Number.isInteger(indiceCarta) || indiceCarta < 1 || indiceCarta > mao.length) {
+                return message.reply('Use: p!uno jogar <número da carta> [cor, se for curinga] — veja os números na sua DM.');
+            }
+
+            const carta = mao[indiceCarta - 1];
+            const topo = jogo.descarte[jogo.descarte.length - 1];
+
+            if (!cartaJogavelUno(carta, topo, jogo.corAtual)) {
+                return message.reply(`❌ Essa carta não combina com o topo (${formatarCartaUno(topo)}, cor atual ${formatarCorAtualUno(jogo.corAtual)}).`);
+            }
+
+            if (!carta.cor && !['vermelho', 'azul', 'verde', 'amarelo'].includes(corEscolhida)) {
+                return message.reply('Use: p!uno jogar <número> <vermelho|azul|verde|amarelo> — precisa escolher a cor pro curinga.');
+            }
+
+            mao.splice(indiceCarta - 1, 1);
+            jogo.descarte.push(carta);
+            jogo.corAtual = carta.cor || corEscolhida;
+
+            // Se a jogada veio de DM, confirma discretamente pro jogador que ela foi enviada pro servidor
+            if (!message.guild) {
+                await message.reply('✅ Jogada enviada pro servidor!').catch(() => {});
+            }
+
+            const avisoCorEscolhida = !carta.cor ? ` (escolheu ${formatarCorAtualUno(jogo.corAtual)})` : '';
+            await canal.send(`🃏 **${message.author.username}** jogou ${formatarCartaUno(carta)}!${avisoCorEscolhida}`);
+
+            if (mao.length === 0) {
+                jogosUno.delete(canal.id);
+                return canal.send(`🏆 **${message.author.username}** ganhou o UNO! 🎉`);
+            }
+
+            if (mao.length === 1) {
+                await canal.send(`🚨 **${message.author.username}** ficou com **UNO!** (1 carta)`);
+            }
+
+            let pular = false;
+
+            if (carta.valor === 'pular') {
+                pular = true;
+            } else if (carta.valor === 'reverter') {
+                jogo.direcao *= -1;
+                if (jogo.jogadores.length === 2) pular = true; // com 2 jogadores, reverter = pular
+            } else if (carta.valor === '+2') {
+                const proximoId = jogo.jogadores[proximoIndiceUno(jogo, false)];
+                jogo.maos.get(proximoId).push(...comprarCartasUno(jogo, 2));
+                await canal.send(`➕ **${jogo.usernames[proximoId]}** comprou 2 cartas e perde a vez!`);
+                await enviarMaoUnoPorDm(jogo, proximoId); // manda a mão atualizada na hora, sem esperar a vez dele(a)
+                pular = true;
+            } else if (carta.valor === '+4') {
+                const proximoId = jogo.jogadores[proximoIndiceUno(jogo, false)];
+                jogo.maos.get(proximoId).push(...comprarCartasUno(jogo, 4));
+                await canal.send(`➕ **${jogo.usernames[proximoId]}** comprou 4 cartas e perde a vez!`);
+                await enviarMaoUnoPorDm(jogo, proximoId); // manda a mão atualizada na hora, sem esperar a vez dele(a)
+                pular = true;
+            }
+
+            jogo.indiceAtual = proximoIndiceUno(jogo, pular);
+            await anunciarTurnoUno(jogo, canal);
+            return;
+        }
+
+        // Abrir mesa / entrar na mesa de UNO
+        if (message.content === 'p!uno') {
+            if (!message.guild) return message.reply('❌ Esse comando só funciona dentro do servidor.');
+
+            const canalId = message.channel.id;
+            const jogoExistente = jogosUno.get(canalId);
+
+            if (jogoExistente && jogoExistente.emAndamento) {
+                return message.reply('❌ Já tem um jogo de UNO em andamento nesse canal. Espere terminar ou use `p!uno cancelar`.');
+            }
+
+            if (jogoExistente && jogoExistente.emLobby) {
+                if (jogoExistente.jogadores.includes(message.author.id)) {
+                    return message.reply('❌ Você já entrou nessa mesa de UNO.');
+                }
+
+                if (jogoExistente.jogadores.length >= MAX_JOGADORES_UNO) {
+                    return message.reply(`❌ A mesa de UNO já está cheia (máximo ${MAX_JOGADORES_UNO} jogadores).`);
+                }
+
+                jogoExistente.jogadores.push(message.author.id);
+                jogoExistente.usernames[message.author.id] = message.author.username;
+
+                return message.channel.send(`🎮 **${message.author.username}** entrou na mesa de UNO! (${jogoExistente.jogadores.length} jogadores)`);
+            }
+
+            const jogo = {
+                emLobby: true,
+                emAndamento: false,
+                jogadores: [message.author.id],
+                usernames: { [message.author.id]: message.author.username },
+                maos: new Map(),
+                baralho: [],
+                descarte: [],
+                corAtual: null,
+                indiceAtual: 0,
+                direcao: 1
+            };
+
+            jogosUno.set(canalId, jogo);
+
+            await message.channel.send(
+                `🎮 **${message.author.username}** abriu uma mesa de UNO!\n` +
+                `Outros jogadores podem entrar com \`p!uno\` nos próximos 30 segundos! (mínimo 2, máximo ${MAX_JOGADORES_UNO})`
+            );
+
+            setTimeout(() => iniciarJogoUno(canalId, message.channel), TEMPO_LOBBY_UNO);
+            return;
+        }
+
         // ---------- Comandos de donos ----------
 
         // Adicionar Miracoins pra uma pessoa
@@ -3401,6 +5346,288 @@ client.on('messageCreate', async (message) => {
         } catch (_) {
             // se nem isso funcionar, só loga e segue a vida
         }
+    }
+}
+
+client.on('messageCreate', async (message) => {
+    if (message.author.bot) return;
+    await processarComando(message);
+});
+
+// ---------- Slash commands (funcionam em DM e grupo de DM, além do servidor) ----------
+// Cada comando de economia/diversão ganha uma versão em slash command. Em vez de reescrever
+// a lógica de cada um, a gente monta uma "mensagem falsa" com o mesmo formato de texto que o
+// comando de prefixo (`p!...`) esperaria, e reaproveita o `processarComando` já existente.
+
+// Constrói uma Collection de menções (imitando message.mentions.users) a partir
+// dos usuários escolhidos nas opções do slash command.
+function construirMencoes(...usuarios) {
+    const colecao = new Collection();
+    for (const usuario of usuarios) {
+        if (usuario) colecao.set(usuario.id, usuario);
+    }
+    return colecao;
+}
+
+const DEFINICOES_SLASH = [
+    {
+        data: new SlashCommandBuilder().setName('ajuda').setDescription('Mostra a lista de comandos do bot.'),
+        montar: () => ({ conteudo: 'p!ajuda' })
+    },
+    {
+        data: new SlashCommandBuilder().setName('escolher').setDescription('Sorteia uma opção entre várias.')
+            .addStringOption(o => o.setName('opcoes').setDescription('Opções separadas por | (ex: gato | cachorro)').setRequired(true)),
+        montar: (i) => ({ conteudo: `p!escolher ${i.options.getString('opcoes')}` })
+    },
+    {
+        data: new SlashCommandBuilder().setName('dado').setDescription('Rola um dado.')
+            .addIntegerOption(o => o.setName('lados').setDescription('Número de lados (padrão: 6)').setMinValue(2)),
+        montar: (i) => ({ conteudo: `p!dado ${i.options.getInteger('lados') || ''}`.trim() })
+    },
+    {
+        data: new SlashCommandBuilder().setName('moeda').setDescription('Cara ou coroa.'),
+        montar: () => ({ conteudo: 'p!moeda' })
+    },
+    {
+        data: new SlashCommandBuilder().setName('8ball').setDescription('Pergunte pra bola 8 mágica.')
+            .addStringOption(o => o.setName('pergunta').setDescription('Sua pergunta').setRequired(true)),
+        montar: (i) => ({ conteudo: `p!8ball ${i.options.getString('pergunta')}` })
+    },
+    {
+        data: new SlashCommandBuilder().setName('ship').setDescription('Compatibilidade entre duas pessoas.')
+            .addUserOption(o => o.setName('pessoa1').setDescription('Primeira pessoa'))
+            .addUserOption(o => o.setName('pessoa2').setDescription('Segunda pessoa')),
+        montar: (i) => ({ conteudo: 'p!ship', mencionados: [i.options.getUser('pessoa1'), i.options.getUser('pessoa2')] })
+    },
+    {
+        data: new SlashCommandBuilder().setName('gay').setDescription('Porcentagem aleatória boba (só brincadeira).')
+            .addUserOption(o => o.setName('pessoa').setDescription('Quem sortear (padrão: você)')),
+        montar: (i) => ({ conteudo: 'p!gay', mencionados: [i.options.getUser('pessoa')] })
+    },
+    {
+        data: new SlashCommandBuilder().setName('fato').setDescription('Um fato curioso aleatório.'),
+        montar: () => ({ conteudo: 'p!fato' })
+    },
+    {
+        data: new SlashCommandBuilder().setName('dica').setDescription('Uma dica aleatória.'),
+        montar: () => ({ conteudo: 'p!dica' })
+    },
+    {
+        data: new SlashCommandBuilder().setName('gato').setDescription('Uma imagem aleatória de gato.'),
+        montar: () => ({ conteudo: 'p!gato' })
+    },
+    {
+        data: new SlashCommandBuilder().setName('perfil').setDescription('Mostra o perfil de economia de alguém.')
+            .addUserOption(o => o.setName('usuario').setDescription('Quem ver (padrão: você)')),
+        montar: (i) => ({ conteudo: 'p!perfil', mencionados: [i.options.getUser('usuario')] })
+    },
+    {
+        data: new SlashCommandBuilder().setName('casar').setDescription('Pede alguém em casamento.')
+            .addUserOption(o => o.setName('pessoa').setDescription('Com quem casar').setRequired(true)),
+        montar: (i) => ({ conteudo: 'p!casar', mencionados: [i.options.getUser('pessoa')] })
+    },
+    {
+        data: new SlashCommandBuilder().setName('divorciar').setDescription('Termina seu casamento atual.'),
+        montar: () => ({ conteudo: 'p!divorciar' })
+    },
+    {
+        data: new SlashCommandBuilder().setName('loja').setDescription('Abre a loja do servidor.'),
+        montar: () => ({ conteudo: 'p!loja' })
+    },
+    {
+        data: new SlashCommandBuilder().setName('comprar').setDescription('Compra um item da loja.')
+            .addStringOption(o => o.setName('item').setDescription('Tipo do item').setRequired(true)
+                .addChoices(
+                    { name: 'Título', value: 'titulo' },
+                    { name: 'Anel de noivado', value: 'anel' },
+                    { name: 'Miraculous', value: 'miraculous' },
+                    { name: 'Cargo VIP', value: 'vip' },
+                    { name: 'Emoji personalizado', value: 'emoji' }
+                ))
+            .addStringOption(o => o.setName('argumento').setDescription('ID do item, ou nome/cor no caso do VIP/emoji')),
+        montar: (i) => ({ conteudo: `p!comprar ${i.options.getString('item')} ${i.options.getString('argumento') || ''}`.trim() })
+    },
+    {
+        data: new SlashCommandBuilder().setName('titulo').setDescription('Equipa ou remove um título comprado.')
+            .addStringOption(o => o.setName('id').setDescription('ID do título, ou "remover"')),
+        montar: (i) => ({ conteudo: `p!titulo ${i.options.getString('id') || ''}`.trim() })
+    },
+    {
+        data: new SlashCommandBuilder().setName('trabalhar').setDescription('Trabalha pra ganhar Miracoins.'),
+        montar: () => ({ conteudo: 'p!trabalhar' })
+    },
+    {
+        data: new SlashCommandBuilder().setName('crime').setDescription('Tenta um crime por Miracoins (risco de multa).'),
+        montar: () => ({ conteudo: 'p!crime' })
+    },
+    {
+        data: new SlashCommandBuilder().setName('diario').setDescription('Recompensa diária de Miracoins.'),
+        montar: () => ({ conteudo: 'p!diario' })
+    },
+    {
+        data: new SlashCommandBuilder().setName('depositar').setDescription('Deposita Miracoins no banco.')
+            .addStringOption(o => o.setName('valor').setDescription('Valor, ou "tudo"').setRequired(true)),
+        montar: (i) => ({ conteudo: `p!depositar ${i.options.getString('valor')}` })
+    },
+    {
+        data: new SlashCommandBuilder().setName('sacar').setDescription('Saca Miracoins do banco.')
+            .addStringOption(o => o.setName('valor').setDescription('Valor, ou "tudo"').setRequired(true)),
+        montar: (i) => ({ conteudo: `p!sacar ${i.options.getString('valor')}` })
+    },
+    {
+        data: new SlashCommandBuilder().setName('transferir').setDescription('Transfere Miracoins pra alguém.')
+            .addUserOption(o => o.setName('pessoa').setDescription('Pra quem transferir').setRequired(true))
+            .addStringOption(o => o.setName('valor').setDescription('Valor, ou "tudo"').setRequired(true)),
+        montar: (i) => ({
+            conteudo: `p!transferir <@${i.options.getUser('pessoa').id}> ${i.options.getString('valor')}`,
+            mencionados: [i.options.getUser('pessoa')]
+        })
+    },
+    {
+        data: new SlashCommandBuilder().setName('cobrar').setDescription('Cobra Miracoins de alguém (precisa aceitar).')
+            .addUserOption(o => o.setName('pessoa').setDescription('De quem cobrar').setRequired(true))
+            .addStringOption(o => o.setName('valor').setDescription('Valor').setRequired(true)),
+        montar: (i) => ({
+            conteudo: `p!cobrar <@${i.options.getUser('pessoa').id}> ${i.options.getString('valor')}`,
+            mencionados: [i.options.getUser('pessoa')]
+        })
+    },
+    {
+        data: new SlashCommandBuilder().setName('emprestimo').setDescription('Pega um empréstimo do imposto arrecadado.')
+            .addIntegerOption(o => o.setName('valor').setDescription('Valor do empréstimo').setRequired(true).setMinValue(1)),
+        montar: (i) => ({ conteudo: `p!emprestimo ${i.options.getInteger('valor')}` })
+    },
+    {
+        data: new SlashCommandBuilder().setName('pagar').setDescription('Paga seu empréstimo ativo.')
+            .addStringOption(o => o.setName('valor').setDescription('Valor, ou "tudo"').setRequired(true)),
+        montar: (i) => ({ conteudo: `p!pagar ${i.options.getString('valor')}` })
+    },
+    {
+        data: new SlashCommandBuilder().setName('divida').setDescription('Mostra sua dívida de empréstimo atual.'),
+        montar: () => ({ conteudo: 'p!divida' })
+    },
+    {
+        data: new SlashCommandBuilder().setName('blackjack').setDescription('Joga blackjack contra o bot.')
+            .addStringOption(o => o.setName('valor').setDescription('Valor da aposta, ou "tudo"').setRequired(true)),
+        montar: (i) => ({ conteudo: `p!blackjack ${i.options.getString('valor')}` })
+    },
+    {
+        data: new SlashCommandBuilder().setName('cacaniquel').setDescription('Joga no caça-níquel.')
+            .addStringOption(o => o.setName('valor').setDescription('Valor da aposta, ou "tudo"').setRequired(true)),
+        montar: (i) => ({ conteudo: `p!cacaniquel ${i.options.getString('valor')}` })
+    },
+    {
+        data: new SlashCommandBuilder().setName('roleta').setDescription('Aposta na roleta.')
+            .addStringOption(o => o.setName('valor').setDescription('Valor da aposta, ou "tudo"').setRequired(true))
+            .addStringOption(o => o.setName('cor').setDescription('Cor escolhida').setRequired(true)
+                .addChoices({ name: 'Vermelho', value: 'vermelho' }, { name: 'Preto', value: 'preto' }, { name: 'Verde', value: 'verde' })),
+        montar: (i) => ({ conteudo: `p!roleta ${i.options.getString('valor')} ${i.options.getString('cor')}` })
+    },
+    {
+        data: new SlashCommandBuilder().setName('bola').setDescription('Entra no Jogo da Bola (multiplayer).')
+            .addStringOption(o => o.setName('valor').setDescription('Valor da aposta, ou "tudo"').setRequired(true)),
+        montar: (i) => ({ conteudo: `p!bola ${i.options.getString('valor')}` })
+    },
+    {
+        data: new SlashCommandBuilder().setName('corrida').setDescription('Entra na Corrida de Cavalos (multiplayer).')
+            .addStringOption(o => o.setName('valor').setDescription('Valor da aposta, ou "tudo"').setRequired(true))
+            .addIntegerOption(o => o.setName('cavalo').setDescription('Número do cavalo').setRequired(true).setMinValue(1)),
+        montar: (i) => ({ conteudo: `p!corrida ${i.options.getString('valor')} ${i.options.getInteger('cavalo')}` })
+    }
+];
+
+// Registra os slash commands globalmente, liberados tanto pra quem instala o bot
+// num servidor quanto pra quem instala na própria conta (funciona em DM e grupo de DM).
+async function registrarSlashCommands() {
+    try {
+        const rest = new REST({ version: '10' }).setToken(process.env.TOKEN);
+
+        const corpo = DEFINICOES_SLASH.map(({ data }) => {
+            const json = data.toJSON();
+            json.integration_types = [0, 1]; // 0 = instalado no servidor, 1 = instalado na conta do usuário
+            json.contexts = [0, 1, 2];        // 0 = servidor, 1 = DM com o bot, 2 = DM/grupo entre usuários
+            return json;
+        });
+
+        await rest.put(Routes.applicationCommands(client.application.id), { body: corpo });
+        console.log(`✅ ${corpo.length} slash commands registrados (funcionam em servidor, DM e grupo de DM).`);
+    } catch (erro) {
+        console.error('Erro ao registrar slash commands:', erro);
+    }
+}
+
+client.once('ready', () => {
+    registrarSlashCommands();
+});
+
+client.on('interactionCreate', async (interacao) => {
+    if (!interacao.isChatInputCommand()) return;
+
+    const definicao = DEFINICOES_SLASH.find(d => d.data.name === interacao.commandName);
+    if (!definicao) return;
+
+    try {
+        const { conteudo, mencionados = [] } = definicao.montar(interacao);
+
+        // Fora de servidor (DM ou grupo de DM entre usuários, "User App"), o bot não tem
+        // acesso ao canal via gateway — channel.send falha silenciosamente nesse contexto.
+        // A única forma de responder ali é pelos próprios métodos da interação
+        // (reply/editReply/followUp). Dentro de servidor, mantemos o fluxo antigo
+        // (ephemeral ✅ + mensagem normal no canal), que já funciona.
+        if (interacao.guild) {
+            await interacao.reply({ content: '✅', ephemeral: true }).catch(() => {});
+
+            const mensagemFalsa = {
+                author: interacao.user,
+                content: conteudo,
+                guild: interacao.guild,
+                member: interacao.member || null,
+                channel: interacao.channel,
+                mentions: { users: construirMencoes(...mencionados) },
+                reply: (payload) => interacao.channel.send(payload),
+                delete: async () => {}
+            };
+
+            await processarComando(mensagemFalsa);
+        } else {
+            await interacao.deferReply();
+
+            let primeiraResposta = true;
+            const enviarResposta = async (payload) => {
+                if (primeiraResposta) {
+                    primeiraResposta = false;
+                    return interacao.editReply(payload);
+                }
+                return interacao.followUp(payload);
+            };
+
+            const canalFalso = {
+                id: interacao.channelId,
+                send: enviarResposta
+            };
+
+            const mensagemFalsa = {
+                author: interacao.user,
+                content: conteudo,
+                guild: null,
+                member: null,
+                channel: canalFalso,
+                mentions: { users: construirMencoes(...mencionados) },
+                reply: enviarResposta,
+                delete: async () => {}
+            };
+
+            await processarComando(mensagemFalsa);
+        }
+    } catch (erro) {
+        console.error('Erro ao processar slash command:', erro);
+        try {
+            if (interacao.deferred || interacao.replied) {
+                await interacao.followUp('❌ Deu ruim aqui, tenta de novo mais tarde.');
+            } else {
+                await interacao.reply('❌ Deu ruim aqui, tenta de novo mais tarde.');
+            }
+        } catch (_) {}
     }
 });
 
